@@ -1,0 +1,12 @@
+{
+  "version": "5",
+  "remote": {
+    "https://deno.land/std@0.208.0/async/delay.ts": "a6142eb44cdd856b645086af2b811b1fcce08ec06bb7d50969e6a872ee9b8659",
+    "https://deno.land/std@0.208.0/http/server.ts": "f3cde6672e631d3e00785743cfa96bfed275618c0352c5ae84abbe5a2e0e4afc",
+    "https://esm.sh/@kurkle/color@0.3.4/es2022/color.mjs": "38c242a4379368af5ba7eeb039ec0b363f19c6bf10125c41cbbeca4e434712b7",
+    "https://esm.sh/@kurkle/color@^0.3.0?target=es2022": "cf4afe2b61b2d287dec4e1999108eb06f3228900cc4afbfbeb73e5970a00a70b",
+    "https://esm.sh/chart.js": "d79424954792d1f5c93e84740c75ab17dace83f07629f17bc06c3349198f45b9",
+    "https://esm.sh/chart.js@4.5.0/es2022/chart.mjs": "4707375910dbbf87a7e9ddd631c8bb3b66ac0a8265840da2b2baabd28ace896c",
+    "https://esm.sh/chart.js@4.5.0/es2022/dist/chunks/helpers.dataset.mjs": "c5e5e5fdac75f5e4fa6e96f7d362004fffc16e669099012bf668a51531bf1cf0"
+  }
+}

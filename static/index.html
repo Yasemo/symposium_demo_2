@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Symposium Demo - Isolated Content Execution</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <h1>Symposium Demo</h1>
+            <p>Secure Content Block Execution with Deno Isolates</p>
+        </header>
+
+        <div class="main-content">
+            <!-- Chat Interface -->
+            <div class="chat-section">
+                <div class="chat-header">
+                    <h2>AI Chat</h2>
+                    <div class="chat-controls">
+                        <div class="mode-toggle">
+                            <button id="plan-mode-btn" class="mode-btn active">Plan Mode</button>
+                            <button id="create-mode-btn" class="mode-btn">Create Mode</button>
+                        </div>
+                        <div class="connection-status" id="connection-status">
+                            <span class="status-indicator" id="status-indicator"></span>
+                            <span id="status-text">Connecting...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-messages" id="chat-messages">
+                    <div class="message system-message">
+                        <div class="message-content">
+                            Welcome to Symposium Demo! I'm here to help you create and execute content blocks securely.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-input">
+                    <input type="text" id="chat-input" placeholder="Ask me to create content blocks..." />
+                    <button id="send-button">Send</button>
+                </div>
+            </div>
+
+            <!-- Content Blocks Area -->
+            <div class="content-section">
+                <div class="content-header">
+                    <h2>Content Blocks</h2>
+                    <button id="new-block-button" class="primary-button">New Block</button>
+                </div>
+
+                <div class="content-blocks" id="content-blocks">
+                    <!-- Content blocks will be dynamically added here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Code Editor Modal -->
+        <div class="modal" id="editor-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Edit Content Block</h3>
+                    <button class="close-button" id="close-modal">&times;</button>
+                </div>
+
+                <div class="code-editors">
+                    <div class="editor-section" data-lang="HTML">
+                        <h4>HTML</h4>
+                        <textarea id="html-editor" placeholder="Enter your HTML code..."></textarea>
+                    </div>
+
+                    <div class="editor-section" data-lang="CSS">
+                        <h4>CSS</h4>
+                        <textarea id="css-editor" placeholder="Enter your CSS styles..."></textarea>
+                    </div>
+
+                    <div class="editor-section" data-lang="JS">
+                        <h4>JavaScript</h4>
+                        <textarea id="js-editor" placeholder="Enter your JavaScript code..."></textarea>
+                    </div>
+
+                    <div class="editor-section" data-lang="JSON">
+                        <h4>Data/Variables (JSON)</h4>
+                        <textarea id="data-editor" placeholder='Enter your data as JSON, e.g.:
+// Simple variables
+{"name": "John", "age": 30}
+
+// Configuration object
+{"theme": "dark", "language": "en"}
+
+// Array data
+{"items": ["apple", "banana", "cherry"]}
+
+// Complex data
+{
+  "user": {"name": "Alice", "level": 5},
+  "settings": {"notifications": true, "theme": "blue"}
+}'></textarea>
+                    </div>
+                </div>
+
+                <div class="modal-actions">
+                    <button id="execute-button" class="primary-button">Execute</button>
+                    <button id="update-button" class="secondary-button">Update</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
