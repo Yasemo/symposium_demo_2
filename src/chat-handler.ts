@@ -65,7 +65,7 @@ export class SymposiumChatHandler {
         console.log(`AI Editing Mode: Modifying selected block ${selectedBlockContext.blockId} with "${userMessage}"`);
 
         const modifiedBlock = await this.geminiClient.generateContentBlock(
-          this.buildEditingPrompt(userMessage, selectedBlockContext.currentCode)
+          this.buildEditingPrompt(userMessage, selectedBlockContext.currentCode, selectedBlockContext.blockId)
         );
 
         botResponse = `I've modified your selected content block with the requested changes!
@@ -319,10 +319,31 @@ The content block has been automatically added to your workspace and executed in
     });
   }
 
-  // Build editing prompt with current code context
-  private buildEditingPrompt(userRequest: string, currentCode: any): string {
+  // Build editing prompt with current code context and persistent data
+  private buildEditingPrompt(userRequest: string, currentCode: any, blockId?: string): string {
+    let persistentDataContext = '';
+
+    // Include persistent data if available
+    if (blockId) {
+      const context = this.getSessionContext('default'); // Get current session context
+      if (context && context.has('persistentData')) {
+        const persistentData = context.get('persistentData');
+        if (persistentData && persistentData[blockId]) {
+          const blockData = persistentData[blockId];
+          persistentDataContext = `
+
+Block Persistent Data:
+${Object.entries(blockData).map(([key, value]) =>
+  `- ${key}: ${JSON.stringify(value)}`
+).join('\n')}
+
+The block has persistent data that should be considered when making changes.`;
+        }
+      }
+    }
+
     return `
-You are modifying an existing content block. The user wants to make changes to their current code.
+You are modifying an existing content block. The user wants to make changes to their current code.${persistentDataContext}
 
 Current Code:
 - HTML: ${currentCode.html || 'None'}
@@ -346,6 +367,7 @@ Make sure to:
 - Only modify what's specifically requested
 - Maintain compatibility and functionality
 - Use modern, clean code practices
+- Consider the block's persistent data when making changes
 `;
   }
 

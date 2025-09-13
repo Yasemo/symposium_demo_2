@@ -1,175 +1,201 @@
 // Isolate Runtime Environment for Symposium Demo
 // This code runs inside Deno Web Workers to execute user-generated content safely
 
+import { DOMParser } from "deno-dom";
+
+// Resource monitoring utilities for isolates
+class ResourceMonitor {
+  constructor(isolateId = 'runtime') {
+    this.startTime = performance.now();
+    this.memoryUsage = [];
+    this.cpuUsage = [];
+    this.lastCpuTime = performance.now();
+    this.isolateId = isolateId;
+  }
+
+  recordMemoryUsage() {
+    try {
+      // Use Deno's memory info API for accurate memory tracking
+      const memInfo = Deno.memoryUsage();
+      const heapUsedMB = memInfo.heapUsed / (1024 * 1024);
+      const rssMB = memInfo.rss / (1024 * 1024);
+
+      this.memoryUsage.push(heapUsedMB);
+
+      console.log(`[${this.isolateId}] Memory - Heap: ${heapUsedMB.toFixed(2)}MB, RSS: ${rssMB.toFixed(2)}MB`);
+
+      if (heapUsedMB > 128) { // 128MB limit
+        throw new Error(`Memory limit exceeded: ${heapUsedMB.toFixed(2)}MB > 128MB`);
+      }
+    } catch (error) {
+      // Fallback to performance.memory if available
+      if (typeof performance !== 'undefined' && performance.memory) {
+        const perfMem = performance.memory;
+        const usedMB = perfMem.usedJSHeapSize / (1024 * 1024);
+        this.memoryUsage.push(usedMB);
+        console.log(`[${this.isolateId}] Memory (fallback) - Used: ${usedMB.toFixed(2)}MB`);
+      } else {
+        console.warn(`[${this.isolateId}] Unable to track memory usage accurately`);
+      }
+    }
+  }
+
+  recordCpuUsage() {
+    try {
+      const currentTime = performance.now();
+      const timeDiff = currentTime - this.lastCpuTime;
+
+      // Estimate CPU usage based on time spent
+      const estimatedCpuPercent = Math.min(100, (timeDiff / 10));
+      this.cpuUsage.push(estimatedCpuPercent);
+
+      console.log(`[${this.isolateId}] CPU Usage: ${estimatedCpuPercent.toFixed(2)}%`);
+      this.lastCpuTime = currentTime;
+    } catch (error) {
+      console.warn(`[${this.isolateId}] Unable to track CPU usage:`, error);
+    }
+  }
+
+  getExecutionTime() {
+    return performance.now() - this.startTime;
+  }
+
+  checkTimeout() {
+    const executionTime = this.getExecutionTime();
+    if (executionTime > 30000) { // 30 seconds
+      throw new Error(`Execution timeout: ${executionTime.toFixed(2)}ms > 30000ms`);
+    }
+  }
+
+  getStats() {
+    return {
+      executionTime: this.getExecutionTime(),
+      averageMemoryUsage: this.memoryUsage.length > 0
+        ? this.memoryUsage.reduce((a, b) => a + b, 0) / this.memoryUsage.length
+        : 0,
+      peakMemoryUsage: this.memoryUsage.length > 0
+        ? Math.max(...this.memoryUsage)
+        : 0,
+      averageCpuUsage: this.cpuUsage.length > 0
+        ? this.cpuUsage.reduce((a, b) => a + b, 0) / this.cpuUsage.length
+        : 0,
+      peakCpuUsage: this.cpuUsage.length > 0
+        ? Math.max(...this.cpuUsage)
+        : 0,
+      isolateId: this.isolateId
+    };
+  }
+
+  logResourceSummary() {
+    const stats = this.getStats();
+    console.log(`[${this.isolateId}] Resource Summary:`, {
+      executionTime: `${stats.executionTime.toFixed(2)}ms`,
+      memory: `${stats.averageMemoryUsage.toFixed(2)}MB avg, ${stats.peakMemoryUsage.toFixed(2)}MB peak`,
+      cpu: `${stats.averageCpuUsage.toFixed(2)}% avg, ${stats.peakCpuUsage.toFixed(2)}% peak`
+    });
+  }
+}
+
 class IsolateRuntime {
   constructor() {
-    this.virtualDOM = this.createVirtualDOM();
     this.apiAccess = this.createAPIAccess();
     this.errorHandler = this.setupErrorHandling();
     this.logs = [];
     this.config = null;
     this.importedModules = new Map(); // Cache for imported modules
-    this.elements = new Map(); // Store elements by ID
-    this.elementCounter = 0; // For generating unique IDs
   }
 
   createVirtualDOM() {
-    // Create a lightweight DOM-like structure for safe content execution
-    const runtime = this; // Capture runtime instance for binding
+    // Initialize resource monitor for this isolate
+    this.resourceMonitor = new ResourceMonitor(this.config?.blockId || 'runtime');
 
+    // Return empty object - we'll set up jsdom in executeContentBlock
+    return {};
+  }
+
+  // Add minimal canvas support to deno-dom
+  addCanvasSupportToDOM(document) {
+    // Override createElement to add canvas support
+    const originalCreateElement = document.createElement;
+    document.createElement = (tagName) => {
+      const element = originalCreateElement.call(document, tagName);
+
+      // Add canvas-specific methods
+      if (tagName === 'canvas') {
+        element.getContext = (contextType) => {
+          if (contextType === '2d') {
+            return this.createCanvas2DContext();
+          }
+          return null;
+        };
+      }
+
+      return element;
+    };
+  }
+
+  // Create a minimal Canvas 2D context
+  createCanvas2DContext() {
     return {
-      document: {
-        createElement: (tagName) => {
-          const element = {
-            tagName,
-            children: [],
-            attributes: {},
-            style: {},
-            textContent: '',
-            _innerHTML: '', // Private backing for innerHTML
-            appendChild: function(child) {
-              if (child) {
-                this.children.push(child);
-              }
-              return child;
-            },
-            setAttribute: function(name, value) {
-              this.attributes[name] = value;
-              // Store element by ID if it has one
-              if (name === 'id') {
-                runtime.elements.set(value, this);
-              }
-            },
-            getAttribute: function(name) {
-              return this.attributes[name];
-            },
-            // Safe innerHTML getter/setter
-            get innerHTML() { return this._innerHTML || ''; },
-            set innerHTML(value) {
-              if (typeof value === 'string') {
-                this._innerHTML = value;
-              } else {
-                this._innerHTML = '';
-              }
-            },
-            // Add canvas-specific methods
-            getContext: function(contextType) {
-              if (tagName === 'canvas') {
-                // Return a mock 2D context for Chart.js
-                return {
-                  canvas: this,
-                  clearRect: function() { /* mock */ },
-                  fillRect: function() { /* mock */ },
-                  strokeRect: function() { /* mock */ },
-                  fillText: function() { /* mock */ },
-                  measureText: function() { return { width: 0 }; },
-                  beginPath: function() { /* mock */ },
-                  moveTo: function() { /* mock */ },
-                  lineTo: function() { /* mock */ },
-                  stroke: function() { /* mock */ },
-                  fill: function() { /* mock */ },
-                  arc: function() { /* mock */ },
-                  save: function() { /* mock */ },
-                  restore: function() { /* mock */ },
-                  translate: function() { /* mock */ },
-                  scale: function() { /* mock */ },
-                  rotate: function() { /* mock */ },
-                  // Add more canvas context methods as needed
-                  drawImage: function() { /* mock */ },
-                  createLinearGradient: function() {
-                    return {
-                      addColorStop: function() { /* mock */ }
-                    };
-                  },
-                  createRadialGradient: function() {
-                    return {
-                      addColorStop: function() { /* mock */ }
-                    };
-                  }
-                };
-              }
-              return null;
-            }
-          };
+      // Basic properties
+      fillStyle: '#000000',
+      strokeStyle: '#000000',
+      lineWidth: 1,
+      font: '10px sans-serif',
 
-          // Add ID property with getter/setter for direct assignment
-          Object.defineProperty(element, 'id', {
-            get: function() { return this.attributes.id; },
-            set: function(value) {
-              this.attributes.id = value;
-              if (value) {
-                runtime.elements.set(value, this);
-              }
-            }
-          });
-
-          return element;
-        },
-        getElementById: function(id) { return runtime.findElementById(id); },
-        querySelector: function(selector) { return runtime.querySelector(selector); },
-        addEventListener: function(type, listener) {
-          // Store event listeners for virtual DOM
-          if (!this._eventListeners) this._eventListeners = {};
-          if (!this._eventListeners[type]) this._eventListeners[type] = [];
-          this._eventListeners[type].push(listener);
-        },
-        removeEventListener: function(type, listener) {
-          // Remove event listeners from virtual DOM
-          if (this._eventListeners && this._eventListeners[type]) {
-            const index = this._eventListeners[type].indexOf(listener);
-            if (index > -1) {
-              this._eventListeners[type].splice(index, 1);
-            }
-          }
-        },
-        body: {
-          innerHTML: '',
-          children: [],
-          style: {},
-          appendChild: function(child) {
-            this.children.push(child);
-            return child;
-          },
-          // Ensure body is never null
-          get innerHTML() { return this._innerHTML || ''; },
-          set innerHTML(value) { this._innerHTML = value; }
-        },
-        head: {
-          children: [],
-          appendChild: function(child) {
-            this.children.push(child);
-            return child;
-          }
-        }
+      // Basic methods
+      clearRect: (x, y, w, h) => {
+        console.log(`Canvas clearRect: ${x},${y} ${w}x${h}`);
       },
-      window: {
-        alert: (msg) => runtime.sendToMain({ type: 'alert', message: msg }),
-        console: {
-          log: (...args) => {
-            const message = args.join(' ');
-            runtime.logs.push(`LOG: ${message}`);
-            runtime.sendToMain({ type: 'log', args });
-          },
-          error: (...args) => {
-            const message = args.join(' ');
-            runtime.logs.push(`ERROR: ${message}`);
-            runtime.sendToMain({ type: 'error', args });
-          },
-          warn: (...args) => {
-            const message = args.join(' ');
-            runtime.logs.push(`WARN: ${message}`);
-            runtime.sendToMain({ type: 'warn', args });
+      fillRect: (x, y, w, h) => {
+        console.log(`Canvas fillRect: ${x},${y} ${w}x${h}`);
+      },
+      strokeRect: (x, y, w, h) => {
+        console.log(`Canvas strokeRect: ${x},${y} ${w}x${h}`);
+      },
+      fillText: (text, x, y) => {
+        console.log(`Canvas fillText: "${text}" at ${x},${y}`);
+      },
+      measureText: (text) => {
+        return { width: text ? text.length * 8 : 0 };
+      },
+
+      // Path methods
+      beginPath: () => console.log('Canvas beginPath'),
+      closePath: () => console.log('Canvas closePath'),
+      moveTo: (x, y) => console.log(`Canvas moveTo: ${x},${y}`),
+      lineTo: (x, y) => console.log(`Canvas lineTo: ${x},${y}`),
+      stroke: () => console.log('Canvas stroke'),
+      fill: () => console.log('Canvas fill'),
+
+      // Arc methods
+      arc: (x, y, radius, startAngle, endAngle) => {
+        console.log(`Canvas arc: center ${x},${y} radius ${radius}`);
+      },
+
+      // Transform methods
+      save: () => console.log('Canvas save'),
+      restore: () => console.log('Canvas restore'),
+      translate: (x, y) => console.log(`Canvas translate: ${x},${y}`),
+      scale: (x, y) => console.log(`Canvas scale: ${x},${y}`),
+      rotate: (angle) => console.log(`Canvas rotate: ${angle}rad`),
+
+      // Gradient support
+      createLinearGradient: (x0, y0, x1, y1) => {
+        console.log(`Canvas createLinearGradient: (${x0},${y0}) to (${x1},${y1})`);
+        return {
+          addColorStop: (offset, color) => {
+            console.log(`Gradient color stop: ${offset} = ${color}`);
           }
-        },
-        setTimeout: (callback, delay) => {
-          // Limited timeout functionality
-          if (delay > 5000) delay = 5000; // Max 5 second delay
-          return setTimeout(callback, delay);
-        },
-        setInterval: (callback, delay) => {
-          // Limited interval functionality
-          if (delay < 100) delay = 100; // Min 100ms interval
-          return setInterval(callback, delay);
+        };
+      },
+
+      // Image support (mock)
+      drawImage: (image, sx, sy, sw, sh, dx, dy, dw, dh) => {
+        if (image && image.complete) {
+          console.log(`Canvas drawImage: ${image.width}x${image.height} image`);
+        } else {
+          console.warn('Canvas drawImage: Image not loaded');
         }
       }
     };
@@ -179,8 +205,19 @@ class IsolateRuntime {
     // Provide controlled access to demo APIs
     return {
       demoAPI: {
+        // Legacy method for backward compatibility
         getData: async (key) => {
           return await this.callMainAPI('getData', { key });
+        },
+        // New persistent storage methods
+        saveData: async (key, value) => {
+          return await this.callMainAPI('saveData', { key, value });
+        },
+        getData: async (key) => {
+          return await this.callMainAPI('getData', { key });
+        },
+        deleteData: async (key) => {
+          return await this.callMainAPI('deleteData', { key });
         },
         updateDisplay: (html) => {
           this.sendToMain({ type: 'updateDisplay', html });
@@ -215,40 +252,84 @@ class IsolateRuntime {
 
   async executeContentBlock(code) {
     try {
-      // Clear previous logs and elements
+      // Clear previous logs
       this.logs = [];
-      this.elements.clear();
 
-      // Set up execution environment
-      globalThis.document = this.virtualDOM.document;
-      globalThis.window = this.virtualDOM.window;
+      // Create deno-dom instance with real browser APIs
+      const htmlContent = code.html || '<html><body></body></html>';
+      const document = new DOMParser().parseFromString(htmlContent, "text/html");
+
+      // Set up global browser APIs using real deno-dom implementations
+      globalThis.document = document;
+
+      // Create minimal window object with essential properties
+      globalThis.window = {
+        document: document,
+        navigator: { userAgent: "Deno Isolate" },
+        location: { href: "http://localhost", hostname: "localhost" },
+        console: {
+          log: (...args) => {
+            const message = args.join(' ');
+            runtime.logs.push(`LOG: ${message}`);
+            runtime.sendToMain({ type: 'log', args });
+          },
+          error: (...args) => {
+            const message = args.join(' ');
+            runtime.logs.push(`ERROR: ${message}`);
+            runtime.sendToMain({ type: 'error', args });
+          },
+          warn: (...args) => {
+            const message = args.join(' ');
+            runtime.logs.push(`WARN: ${message}`);
+            runtime.sendToMain({ type: 'warn', args });
+          }
+        },
+        setTimeout: (callback, delay) => {
+          if (delay > 5000) delay = 5000;
+          return setTimeout(callback, delay);
+        },
+        setInterval: (callback, delay) => {
+          if (delay < 100) delay = 100;
+          return setInterval(callback, delay);
+        }
+      };
+
+      globalThis.navigator = globalThis.window.navigator;
+      // Don't override globalThis.location - worker already has it
+
+      // Add our controlled API access
       globalThis.demoAPI = this.apiAccess.demoAPI;
+
+      // Override fetch to validate URLs (using global fetch)
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (url, options) => {
+        if (!this.isAllowedUrl(url)) {
+          throw new Error(`Fetch blocked: ${url}`);
+        }
+        console.log(`Fetching: ${url}`);
+        return await originalFetch(url, options);
+      };
 
       // Inject CSS if provided
       if (code.css) {
         this.injectCSS(code.css);
       }
 
-      // Process HTML if provided
-      if (code.html) {
-        this.processHTML(code.html);
-      }
-
       // Execute JavaScript if provided
       if (code.javascript) {
-        await this.executeJavaScript(code.javascript, code.data);
+        await this.executeJavaScript(code.javascript);
       }
 
-    // Return execution results
-    return {
-      type: 'execution_result',
-      success: true,
-      html: this.virtualDOM.document.body?.innerHTML || '',
-      css: code.css || '', // Return the original CSS
-      javascript: code.javascript || '', // Return the original JavaScript
-      logs: this.logs,
-      timestamp: Date.now()
-    };
+      // Return execution results
+      return {
+        type: 'execution_result',
+        success: true,
+        html: globalThis.document.body?.innerHTML || '',
+        css: code.css || '',
+        javascript: code.javascript || '',
+        logs: this.logs,
+        timestamp: Date.now()
+      };
 
     } catch (error) {
       console.error('Content execution error:', error);
@@ -264,119 +345,26 @@ class IsolateRuntime {
   }
 
   async updateContentBlock(updates) {
-    try {
-      // Update CSS if provided
-      if (updates.css) {
-        this.injectCSS(updates.css);
-      }
-
-      // Update HTML if provided
-      if (updates.html) {
-        this.processHTML(updates.html);
-      }
-
-      // Update JavaScript if provided
-      if (updates.javascript) {
-        await this.executeJavaScript(updates.javascript, updates.data);
-      }
-
-      return {
-        type: 'update_result',
-        success: true,
-        html: this.virtualDOM.document.body.innerHTML,
-        css: updates.css || '', // Return the updated CSS
-        javascript: updates.javascript || '', // Return the updated JavaScript
-        logs: this.logs,
-        timestamp: Date.now()
-      };
-
-    } catch (error) {
-      console.error('Content update error:', error);
-      return {
-        type: 'update_result',
-        success: false,
-        error: error.message,
-        stack: error.stack,
-        logs: this.logs,
-        timestamp: Date.now()
-      };
-    }
+    // For now, updates are handled by re-executing with new content
+    // In the future, this could be optimized to update existing jsdom instances
+    console.log('Update requested - re-executing with new content');
+    return await this.executeContentBlock(updates);
   }
 
   injectCSS(css) {
-    // In a real implementation, this would inject CSS into the virtual DOM
-    // For now, we'll just log it
+    // Inject CSS into deno-dom document
+    const styleElement = globalThis.document.createElement('style');
+    styleElement.textContent = css;
+    globalThis.document.head.appendChild(styleElement);
+
     console.log('Injecting CSS:', css.substring(0, 100) + (css.length > 100 ? '...' : ''));
     this.logs.push(`CSS injected: ${css.length} characters`);
   }
 
-  processHTML(html) {
-    // Process template literals in HTML
-    const processedHtml = this.processTemplates(html);
 
-    // In a real implementation, this would parse and process HTML
-    // For now, we'll just set it as the body content
-    this.virtualDOM.document.body.innerHTML = processedHtml;
-    console.log('Processing HTML:', processedHtml.substring(0, 100) + (processedHtml.length > 100 ? '...' : ''));
-    this.logs.push(`HTML processed: ${processedHtml.length} characters`);
-  }
 
-  // Process template literals like {{DATA.title}} in HTML
-  processTemplates(html) {
-    if (!html || typeof html !== 'string') {
-      return html;
-    }
-
-    // Replace {{expression}} with evaluated values
-    return html.replace(/\{\{([^}]+)\}\}/g, (match, expression) => {
-      try {
-        // Create a safe evaluation context
-        const context = {
-          DATA: globalThis.DATA || {},
-          console: globalThis.console,
-          Math: Math,
-          Date: Date,
-          // Add other safe globals as needed
-        };
-
-        // Evaluate the expression in the safe context
-        const result = this.evaluateExpression(expression.trim(), context);
-
-        // Return the result or empty string if undefined/null
-        return result !== undefined && result !== null ? String(result) : '';
-      } catch (error) {
-        console.error('Template evaluation error:', error);
-        this.logs.push(`Template error: ${expression} - ${error.message}`);
-        return match; // Return original template on error
-      }
-    });
-  }
-
-  // Safely evaluate JavaScript expressions
-  evaluateExpression(expression, context) {
+  async executeJavaScript(javascript) {
     try {
-      // Create a function with the context as parameters
-      const paramNames = Object.keys(context);
-      const paramValues = Object.values(context);
-
-      const evaluator = new Function(...paramNames, `return ${expression}`);
-      return evaluator(...paramValues);
-    } catch (error) {
-      console.error('Expression evaluation error:', error);
-      throw error;
-    }
-  }
-
-  async executeJavaScript(javascript, data) {
-    try {
-      // Set up data if provided
-      if (data) {
-        globalThis.DATA = data;
-        console.log('Data injected into isolate:', data);
-      } else {
-        globalThis.DATA = {};
-      }
-
       // Parse and handle import statements
       const { imports, code } = await this.parseImports(javascript);
 
@@ -506,30 +494,7 @@ class IsolateRuntime {
     }
   }
 
-  // Virtual DOM helper methods
-  findElementById(id) {
-    console.log(`Looking for element with id: ${id}`);
-    return this.elements.get(id) || null;
-  }
 
-  querySelector(selector) {
-    console.log(`Querying selector: ${selector}`);
-
-    // Simple selector parsing - just handle basic ID and class selectors
-    if (selector.startsWith('#')) {
-      // ID selector
-      const id = selector.substring(1);
-      return this.findElementById(id);
-    } else if (selector.startsWith('.')) {
-      // Class selector - not fully implemented
-      console.log(`Class selector ${selector} not fully implemented`);
-      return null;
-    } else {
-      // Tag selector - not fully implemented
-      console.log(`Tag selector ${selector} not fully implemented`);
-      return null;
-    }
-  }
 
   async callMainAPI(method, params) {
     return new Promise((resolve, reject) => {

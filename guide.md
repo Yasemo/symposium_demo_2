@@ -12,6 +12,7 @@ This guide provides detailed implementation instructions for a Symposium demo th
 4. **Context Management**: Include/exclude chat messages and content block data
 5. **Live Editing**: Modify content blocks with isolate re-execution
 6. **Safe API Access**: Controlled access to demo APIs through isolate boundaries
+7. **Simplified Interface**: Just HTML, CSS, and JavaScript editors (no dynamic variables)
 
 ## Technology Stack
 

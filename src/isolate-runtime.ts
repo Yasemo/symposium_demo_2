@@ -13,7 +13,6 @@ export interface ContentBlockCode {
   html: string;
   css: string;
   javascript: string;
-  data?: any;
 }
 
 export interface ExecutionResult {
@@ -191,30 +190,90 @@ export function validateCSS(css: string): { valid: boolean; errors: string[] } {
 export class ResourceMonitor {
   private startTime: number;
   private memoryUsage: number[];
+  private cpuUsage: number[];
+  private lastCpuTime: number;
+  private isolateId: string;
 
-  constructor() {
-    this.startTime = Date.now();
+  constructor(isolateId: string = 'main') {
+    this.startTime = performance.now();
     this.memoryUsage = [];
+    this.cpuUsage = [];
+    this.lastCpuTime = performance.now();
+    this.isolateId = isolateId;
   }
 
   recordMemoryUsage(): void {
-    // In a real implementation, this would track actual memory usage
-    // For now, we'll simulate it
-    const simulatedUsage = Math.random() * RUNTIME_CONSTANTS.MAX_MEMORY_MB;
-    this.memoryUsage.push(simulatedUsage);
+    try {
+      // Use Deno's memory info API for accurate memory tracking
+      const memInfo = Deno.memoryUsage();
+      const heapUsedMB = memInfo.heapUsed / (1024 * 1024);
+      const rssMB = memInfo.rss / (1024 * 1024);
 
-    if (simulatedUsage > RUNTIME_CONSTANTS.MAX_MEMORY_MB) {
-      throw new Error(`Memory limit exceeded: ${simulatedUsage}MB > ${RUNTIME_CONSTANTS.MAX_MEMORY_MB}MB`);
+      this.memoryUsage.push(heapUsedMB);
+
+      console.log(`[${this.isolateId}] Memory - Heap: ${heapUsedMB.toFixed(2)}MB, RSS: ${rssMB.toFixed(2)}MB`);
+
+      if (heapUsedMB > RUNTIME_CONSTANTS.MAX_MEMORY_MB) {
+        throw new ResourceError(`Memory limit exceeded: ${heapUsedMB.toFixed(2)}MB > ${RUNTIME_CONSTANTS.MAX_MEMORY_MB}MB`);
+      }
+    } catch (error) {
+      // Fallback to performance.memory if available
+      if (typeof performance !== 'undefined' && (performance as any).memory) {
+        const perfMem = (performance as any).memory;
+        const usedMB = perfMem.usedJSHeapSize / (1024 * 1024);
+        this.memoryUsage.push(usedMB);
+        console.log(`[${this.isolateId}] Memory (fallback) - Used: ${usedMB.toFixed(2)}MB`);
+      } else {
+        console.warn(`[${this.isolateId}] Unable to track memory usage accurately`);
+      }
+    }
+  }
+
+  recordCpuUsage(): void {
+    try {
+      const currentTime = performance.now();
+      const timeDiff = currentTime - this.lastCpuTime;
+
+      // Estimate CPU usage based on time spent
+      // In a real implementation, you'd use more sophisticated CPU tracking
+      const estimatedCpuPercent = Math.min(100, (timeDiff / 10)); // Rough estimation
+      this.cpuUsage.push(estimatedCpuPercent);
+
+      console.log(`[${this.isolateId}] CPU Usage: ${estimatedCpuPercent.toFixed(2)}%`);
+      this.lastCpuTime = currentTime;
+    } catch (error) {
+      console.warn(`[${this.isolateId}] Unable to track CPU usage:`, error);
     }
   }
 
   getExecutionTime(): number {
-    return Date.now() - this.startTime;
+    return performance.now() - this.startTime;
   }
 
   checkTimeout(): void {
-    if (this.getExecutionTime() > RUNTIME_CONSTANTS.MAX_EXECUTION_TIME) {
-      throw new Error(`Execution timeout: ${this.getExecutionTime()}ms > ${RUNTIME_CONSTANTS.MAX_EXECUTION_TIME}ms`);
+    const executionTime = this.getExecutionTime();
+    if (executionTime > RUNTIME_CONSTANTS.MAX_EXECUTION_TIME) {
+      throw new ResourceError(`Execution timeout: ${executionTime.toFixed(2)}ms > ${RUNTIME_CONSTANTS.MAX_EXECUTION_TIME}ms`);
+    }
+  }
+
+  getSystemResources(): {
+    memoryInfo: any;
+    cpuCount: number;
+    loadAverage?: number[];
+  } {
+    try {
+      return {
+        memoryInfo: Deno.memoryUsage(),
+        cpuCount: navigator.hardwareConcurrency || 1,
+        loadAverage: Deno.loadavg ? Deno.loadavg() : undefined
+      };
+    } catch (error) {
+      return {
+        memoryInfo: null,
+        cpuCount: navigator.hardwareConcurrency || 1,
+        loadAverage: undefined
+      };
     }
   }
 
@@ -222,7 +281,13 @@ export class ResourceMonitor {
     executionTime: number;
     averageMemoryUsage: number;
     peakMemoryUsage: number;
+    averageCpuUsage: number;
+    peakCpuUsage: number;
+    systemResources: any;
+    isolateId: string;
   } {
+    const systemResources = this.getSystemResources();
+
     return {
       executionTime: this.getExecutionTime(),
       averageMemoryUsage: this.memoryUsage.length > 0
@@ -230,8 +295,28 @@ export class ResourceMonitor {
         : 0,
       peakMemoryUsage: this.memoryUsage.length > 0
         ? Math.max(...this.memoryUsage)
-        : 0
+        : 0,
+      averageCpuUsage: this.cpuUsage.length > 0
+        ? this.cpuUsage.reduce((a, b) => a + b, 0) / this.cpuUsage.length
+        : 0,
+      peakCpuUsage: this.cpuUsage.length > 0
+        ? Math.max(...this.cpuUsage)
+        : 0,
+      systemResources,
+      isolateId: this.isolateId
     };
+  }
+
+  logResourceSummary(): void {
+    const stats = this.getStats();
+    console.log(`[${this.isolateId}] Resource Summary:`, {
+      executionTime: `${stats.executionTime.toFixed(2)}ms`,
+      memory: `${stats.averageMemoryUsage.toFixed(2)}MB avg, ${stats.peakMemoryUsage.toFixed(2)}MB peak`,
+      cpu: `${stats.averageCpuUsage.toFixed(2)}% avg, ${stats.peakCpuUsage.toFixed(2)}% peak`,
+      systemMemory: stats.systemResources.memoryInfo
+        ? `${(stats.systemResources.memoryInfo.heapUsed / (1024 * 1024)).toFixed(2)}MB heap used`
+        : 'N/A'
+    });
   }
 }
 

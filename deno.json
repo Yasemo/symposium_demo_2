@@ -1,14 +1,22 @@
 {
   "compilerOptions": {
-    "lib": ["deno.window"],
-    "strict": true
+    "lib": ["deno.window", "deno.unstable"],
+    "strict": true,
+    "unstable": ["kv"]
   },
   "imports": {
-    "std/": "https://deno.land/std@0.208.0/"
+    "std/": "https://deno.land/std@0.208.0/",
+    "postgres": "https://deno.land/x/postgres@v0.19.3/mod.ts",
+    "redis": "https://deno.land/x/redis@v0.32.1/mod.ts",
+    "gcp/": "https://deno.land/x/google_cloud@0.4.0/",
+    "deno-dom": "jsr:@b-fuze/deno-dom"
   },
   "tasks": {
-    "dev": "deno run --allow-all main.ts",
-    "start": "deno run --allow-all --watch main.ts"
+    "dev": "deno run --allow-all --unstable-kv --watch main.ts",
+    "start": "deno run --allow-all --unstable-kv main.ts",
+    "setup": "./setup.sh",
+    "deploy": "./deploy-cloud-run.sh",
+    "logs": "deno run --allow-all --unstable-kv main.ts --log-level=debug"
   },
   "fmt": {
     "files": {

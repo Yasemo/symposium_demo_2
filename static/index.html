@@ -81,23 +81,15 @@
                         <textarea id="js-editor" placeholder="Enter your JavaScript code..."></textarea>
                     </div>
 
-                    <div class="editor-section" data-lang="JSON">
-                        <h4>Data/Variables (JSON)</h4>
-                        <textarea id="data-editor" placeholder='Enter your data as JSON, e.g.:
-// Simple variables
-{"name": "John", "age": 30}
-
-// Configuration object
-{"theme": "dark", "language": "en"}
-
-// Array data
-{"items": ["apple", "banana", "cherry"]}
-
-// Complex data
-{
-  "user": {"name": "Alice", "level": 5},
-  "settings": {"notifications": true, "theme": "blue"}
-}'></textarea>
+                    <div class="data-viewer-section">
+                        <div class="data-viewer-header" onclick="toggleDataViewer()">
+                            <h4>Stored Data <span class="data-count">0</span> <span id="data-toggle-icon">▼</span></h4>
+                        </div>
+                        <div id="data-viewer-content" class="data-viewer-content collapsed">
+                            <div id="data-items" class="data-items">
+                                <div class="no-data">No data stored for this block</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
