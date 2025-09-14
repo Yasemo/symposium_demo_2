@@ -96,6 +96,176 @@ class ResourceMonitor {
   }
 }
 
+// Isolate-scoped storage implementation
+class IsolateStorage {
+  constructor(type, isolateId, quotaBytes) {
+    this.type = type; // 'local' or 'session'
+    this.isolateId = isolateId;
+    this.quotaBytes = quotaBytes;
+    this.storageKey = `isolate_${type}_${isolateId}`;
+    this.data = new Map();
+    this.bytesUsed = 0;
+
+    // Load existing data from persistent storage
+    this.loadFromPersistentStorage();
+  }
+
+  // Load data from the main thread's persistent storage
+  async loadFromPersistentStorage() {
+    try {
+      // Request data from main thread
+      const result = await this.callMainAPI('getData', { key: this.storageKey });
+      if (result && typeof result === 'object') {
+        this.data = new Map(Object.entries(result));
+        this.bytesUsed = this.calculateBytesUsed();
+        console.log(`[${this.isolateId}] Loaded ${this.data.size} items from ${this.type}Storage (${this.bytesUsed} bytes)`);
+      }
+    } catch (error) {
+      console.warn(`[${this.isolateId}] Failed to load ${this.type}Storage:`, error);
+    }
+  }
+
+  // Save data to persistent storage
+  async saveToPersistentStorage() {
+    try {
+      const dataObject = Object.fromEntries(this.data);
+      await this.callMainAPI('saveData', { key: this.storageKey, value: dataObject });
+    } catch (error) {
+      console.error(`[${this.isolateId}] Failed to save ${this.type}Storage:`, error);
+    }
+  }
+
+  // Storage API methods
+  getItem(key) {
+    const value = this.data.get(key);
+    return value !== undefined ? String(value) : null;
+  }
+
+  setItem(key, value) {
+    const valueStr = String(value);
+    const keySize = key.length * 2; // UTF-16 bytes
+    const valueSize = valueStr.length * 2;
+    const totalSize = keySize + valueSize;
+
+    // Check quota
+    const currentUsageWithoutOldValue = this.bytesUsed - (this.data.has(key) ? (key.length * 2 + String(this.data.get(key)).length * 2) : 0);
+    if (currentUsageWithoutOldValue + totalSize > this.quotaBytes) {
+      throw new Error(`Quota exceeded: ${this.type}Storage quota of ${this.quotaBytes} bytes would be exceeded`);
+    }
+
+    this.data.set(key, valueStr);
+    this.bytesUsed = this.calculateBytesUsed();
+
+    // Persist to main thread storage
+    this.saveToPersistentStorage().catch(error => {
+      console.warn(`[${this.isolateId}] Failed to persist ${this.type}Storage:`, error);
+    });
+
+    console.log(`[${this.isolateId}] ${this.type}Storage set: ${key} = ${valueStr.substring(0, 50)}${valueStr.length > 50 ? '...' : ''}`);
+  }
+
+  removeItem(key) {
+    if (this.data.has(key)) {
+      const oldValue = this.data.get(key);
+      const keySize = key.length * 2;
+      const valueSize = String(oldValue).length * 2;
+
+      this.data.delete(key);
+      this.bytesUsed -= (keySize + valueSize);
+
+      // Persist changes
+      this.saveToPersistentStorage().catch(error => {
+        console.warn(`[${this.isolateId}] Failed to persist ${this.type}Storage removal:`, error);
+      });
+
+      console.log(`[${this.isolateId}] ${this.type}Storage removed: ${key}`);
+    }
+  }
+
+  clear() {
+    this.data.clear();
+    this.bytesUsed = 0;
+
+    // Clear from persistent storage
+    this.callMainAPI('deleteData', { key: this.storageKey }).catch(error => {
+      console.warn(`[${this.isolateId}] Failed to clear ${this.type}Storage:`, error);
+    });
+
+    console.log(`[${this.isolateId}] ${this.type}Storage cleared`);
+  }
+
+  key(index) {
+    const keys = Array.from(this.data.keys());
+    return keys[index] || null;
+  }
+
+  get length() {
+    return this.data.size;
+  }
+
+  // Calculate total bytes used by storage
+  calculateBytesUsed() {
+    let total = 0;
+    for (const [key, value] of this.data.entries()) {
+      total += key.length * 2; // UTF-16 bytes for key
+      total += String(value).length * 2; // UTF-16 bytes for value
+    }
+    return total;
+  }
+
+  // Get storage info for monitoring
+  getStorageInfo() {
+    return {
+      type: this.type,
+      isolateId: this.isolateId,
+      itemCount: this.data.size,
+      bytesUsed: this.bytesUsed,
+      quotaBytes: this.quotaBytes,
+      usagePercent: (this.bytesUsed / this.quotaBytes) * 100
+    };
+  }
+
+  // Helper method to call main API
+  async callMainAPI(method, params) {
+    return new Promise((resolve, reject) => {
+      const callId = crypto.randomUUID();
+
+      const handleResponse = (event) => {
+        if (event.data.type === 'apiResponse' && event.data.callId === callId) {
+          self.removeEventListener('message', handleResponse);
+          resolve(event.data.result);
+        }
+      };
+
+      self.addEventListener('message', handleResponse);
+
+      // Use the runtime's sendToMain method
+      if (typeof runtime !== 'undefined' && runtime.sendToMain) {
+        runtime.sendToMain({
+          type: 'apiCall',
+          method,
+          params,
+          callId
+        });
+      } else {
+        // Fallback if runtime not available
+        self.postMessage({
+          type: 'apiCall',
+          method,
+          params,
+          callId
+        });
+      }
+
+      // Timeout after 5 seconds for storage operations
+      setTimeout(() => {
+        self.removeEventListener('message', handleResponse);
+        reject(new Error('Storage API call timeout'));
+      }, 5000);
+    });
+  }
+}
+
 class IsolateRuntime {
   constructor() {
     this.apiAccess = this.createAPIAccess();
@@ -103,12 +273,16 @@ class IsolateRuntime {
     this.logs = [];
     this.config = null;
     this.importedModules = new Map(); // Cache for imported modules
+  // Initialize resource monitor for this isolate
+    this.resourceMonitor = new ResourceMonitor(this.config?.blockId || 'runtime');
+
+    // Initialize storage systems
+    this.storageQuota = { localStorage: 5 * 1024 * 1024, sessionStorage: 1 * 1024 * 1024 }; // 5MB local, 1MB session
+    this.localStorage = new IsolateStorage('local', this.config?.blockId || 'runtime', this.storageQuota.localStorage);
+    this.sessionStorage = new IsolateStorage('session', this.config?.blockId || 'runtime', this.storageQuota.sessionStorage);
   }
 
   createVirtualDOM() {
-    // Initialize resource monitor for this isolate
-    this.resourceMonitor = new ResourceMonitor(this.config?.blockId || 'runtime');
-
     // Return empty object - we'll set up jsdom in executeContentBlock
     return {};
   }
@@ -255,8 +429,27 @@ class IsolateRuntime {
       // Clear previous logs
       this.logs = [];
 
+      console.log(`📝 Executing content block - HTML: ${(code.html || '').length} chars, CSS: ${(code.css || '').length} chars, JS: ${(code.javascript || '').length} chars`);
+
+      // Record initial memory usage
+      this.resourceMonitor.recordMemoryUsage();
+
+      let htmlContent;
+      let extractedCss = code.css || '';
+      let extractedJs = code.javascript || '';
+
+      // Check if HTML is a complete document or just HTML content
+      if (code.html && code.html.trim().startsWith('<!DOCTYPE html>')) {
+        // It's a complete HTML document - use it as-is
+        htmlContent = code.html;
+        console.log('Using complete HTML document');
+      } else {
+        // Legacy format - construct HTML document from parts
+        htmlContent = code.html || '<html><body></body></html>';
+        console.log('Constructing HTML document from parts');
+      }
+
       // Create deno-dom instance with real browser APIs
-      const htmlContent = code.html || '<html><body></body></html>';
       const document = new DOMParser().parseFromString(htmlContent, "text/html");
 
       // Set up global browser APIs using real deno-dom implementations
@@ -267,6 +460,9 @@ class IsolateRuntime {
         document: document,
         navigator: { userAgent: "Deno Isolate" },
         location: { href: "http://localhost", hostname: "localhost" },
+        // Storage APIs
+        localStorage: this.localStorage,
+        sessionStorage: this.sessionStorage,
         console: {
           log: (...args) => {
             const message = args.join(' ');
@@ -291,11 +487,56 @@ class IsolateRuntime {
         setInterval: (callback, delay) => {
           if (delay < 100) delay = 100;
           return setInterval(callback, delay);
+        },
+        // Enhanced DOM methods
+        querySelector: (selector) => {
+          try {
+            return document.querySelector(selector);
+          } catch (error) {
+            console.warn('querySelector error:', error);
+            return null;
+          }
+        },
+        querySelectorAll: (selector) => {
+          try {
+            return Array.from(document.querySelectorAll(selector));
+          } catch (error) {
+            console.warn('querySelectorAll error:', error);
+            return [];
+          }
+        },
+        getElementsByClassName: (className) => {
+          try {
+            return Array.from(document.getElementsByClassName(className));
+          } catch (error) {
+            console.warn('getElementsByClassName error:', error);
+            return [];
+          }
+        },
+        getElementsByTagName: (tagName) => {
+          try {
+            return Array.from(document.getElementsByTagName(tagName));
+          } catch (error) {
+            console.warn('getElementsByTagName error:', error);
+            return [];
+          }
+        },
+        getElementById: (id) => {
+          try {
+            return document.getElementById(id);
+          } catch (error) {
+            console.warn('getElementById error:', error);
+            return null;
+          }
         }
       };
 
       globalThis.navigator = globalThis.window.navigator;
       // Don't override globalThis.location - worker already has it
+
+      // Expose storage APIs globally
+      globalThis.localStorage = this.localStorage;
+      globalThis.sessionStorage = this.sessionStorage;
 
       // Add our controlled API access
       globalThis.demoAPI = this.apiAccess.demoAPI;
@@ -310,14 +551,19 @@ class IsolateRuntime {
         return await originalFetch(url, options);
       };
 
-      // Inject CSS if provided
-      if (code.css) {
-        this.injectCSS(code.css);
-      }
+      // For complete HTML documents, extract and execute embedded scripts
+      if (code.html && code.html.trim().startsWith('<!DOCTYPE html>')) {
+        // Extract and execute scripts from the HTML document
+        await this.executeEmbeddedScripts(document);
+      } else {
+        // Legacy behavior - inject CSS and execute separate JS
+        if (extractedCss) {
+          this.injectCSS(extractedCss);
+        }
 
-      // Execute JavaScript if provided
-      if (code.javascript) {
-        await this.executeJavaScript(code.javascript);
+        if (extractedJs) {
+          await this.executeJavaScript(extractedJs);
+        }
       }
 
       // Return execution results
@@ -325,8 +571,8 @@ class IsolateRuntime {
         type: 'execution_result',
         success: true,
         html: globalThis.document.body?.innerHTML || '',
-        css: code.css || '',
-        javascript: code.javascript || '',
+        css: extractedCss,
+        javascript: extractedJs,
         logs: this.logs,
         timestamp: Date.now()
       };
@@ -345,10 +591,21 @@ class IsolateRuntime {
   }
 
   async updateContentBlock(updates) {
-    // For now, updates are handled by re-executing with new content
-    // In the future, this could be optimized to update existing jsdom instances
-    console.log('Update requested - re-executing with new content');
-    return await this.executeContentBlock(updates);
+    console.log('🔄 Update requested - executing with new code');
+    console.log(' Update data:', {
+      hasHtml: !!updates.html,
+      hasCss: !!updates.css,
+      hasJs: !!updates.javascript,
+      htmlLength: updates.html?.length || 0,
+      cssLength: updates.css?.length || 0,
+      jsLength: updates.javascript?.length || 0
+    });
+
+    // Simply execute the updates as the new complete code
+    const result = await this.executeContentBlock(updates);
+
+    console.log('📤 Sending update result to main thread');
+    return result;
   }
 
   injectCSS(css) {
@@ -359,6 +616,28 @@ class IsolateRuntime {
 
     console.log('Injecting CSS:', css.substring(0, 100) + (css.length > 100 ? '...' : ''));
     this.logs.push(`CSS injected: ${css.length} characters`);
+  }
+
+  // Extract and execute embedded scripts from HTML document
+  async executeEmbeddedScripts(document) {
+    const scripts = document.querySelectorAll('script');
+
+    for (const script of scripts) {
+      const scriptContent = script.textContent || script.innerText || '';
+
+      if (scriptContent.trim()) {
+        console.log(`Executing embedded script (${scriptContent.length} chars)`);
+        this.logs.push(`Executing embedded script: ${scriptContent.length} characters`);
+
+        try {
+          await this.executeJavaScript(scriptContent);
+        } catch (error) {
+          console.error('Embedded script execution error:', error);
+          this.logs.push(`Embedded script error: ${error.message}`);
+          // Continue with other scripts even if one fails
+        }
+      }
+    }
   }
 
 
@@ -496,6 +775,35 @@ class IsolateRuntime {
 
 
 
+  getMemoryStats() {
+    if (this.resourceMonitor) {
+      return this.resourceMonitor.getStats();
+    }
+
+    // Fallback if no resource monitor is available
+    try {
+      const memInfo = Deno.memoryUsage();
+      return {
+        executionTime: 0,
+        averageMemoryUsage: memInfo.heapUsed / (1024 * 1024),
+        peakMemoryUsage: memInfo.heapUsed / (1024 * 1024),
+        averageCpuUsage: 0,
+        peakCpuUsage: 0,
+        isolateId: this.config?.blockId || 'runtime'
+      };
+    } catch (error) {
+      console.warn('Unable to get memory stats:', error);
+      return {
+        executionTime: 0,
+        averageMemoryUsage: 0,
+        peakMemoryUsage: 0,
+        averageCpuUsage: 0,
+        peakCpuUsage: 0,
+        isolateId: this.config?.blockId || 'runtime'
+      };
+    }
+  }
+
   async callMainAPI(method, params) {
     return new Promise((resolve, reject) => {
       const callId = crypto.randomUUID();
@@ -523,6 +831,15 @@ class IsolateRuntime {
       }, 10000);
     });
   }
+
+  // Get storage statistics for monitoring
+  getStorageStats() {
+    return {
+      localStorage: this.localStorage.getStorageInfo(),
+      sessionStorage: this.sessionStorage.getStorageInfo(),
+      timestamp: Date.now()
+    };
+  }
 }
 
 // Initialize runtime when isolate starts
@@ -530,7 +847,7 @@ const runtime = new IsolateRuntime();
 
 // Listen for execution requests from main thread
 self.addEventListener('message', async (event) => {
-  const { type, code, updates, config } = event.data;
+  const { type, code, updates, config, requestId } = event.data;
 
   // Store config if provided
   if (config) {
@@ -543,6 +860,24 @@ self.addEventListener('message', async (event) => {
   } else if (type === 'update') {
     const result = await runtime.updateContentBlock(updates);
     self.postMessage(result);
+  } else if (type === 'get_memory_stats') {
+    // Handle memory stats request
+    const stats = runtime.getMemoryStats();
+    self.postMessage({
+      type: 'memory_stats_response',
+      requestId,
+      stats,
+      timestamp: Date.now()
+    });
+  } else if (type === 'get_storage_stats') {
+    // Handle storage stats request
+    const stats = runtime.getStorageStats();
+    self.postMessage({
+      type: 'storage_stats_response',
+      requestId,
+      stats,
+      timestamp: Date.now()
+    });
   }
 });
 

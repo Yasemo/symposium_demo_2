@@ -226,6 +226,8 @@
     "https://esm.sh/entities@6.0.1/escape?target=denonext": "c3df42c65816226666e5a0560e68e3c058a184684488a26b3dedce05eaa329e2",
     "https://esm.sh/form-data@4.0.4/denonext/form-data.mjs": "d3c67b7f6274bf1ed286037a245a05db0f10a99fbc3fb01ea03cb364be0b0531",
     "https://esm.sh/form-data@4.0.4?target=denonext": "28109a5e785dcbc01475380de1abc1f50572221a537311078c724324347e0541",
+    "https://esm.sh/gsap@3.12.5": "e5b5af26377fbac0ac0bfd23d077c713efb2bbb80f76d5b5e2b0c8e07b00bca3",
+    "https://esm.sh/gsap@3.12.5/denonext/gsap.mjs": "bb746599ba9eca2e338ccf0234da0a35c0cf1fc6f175dbfa4b466bc604e8b8ca",
     "https://esm.sh/html-encoding-sniffer@4.0.0/denonext/html-encoding-sniffer.mjs": "7ddb6dc2201652cb21f0ef05cf26123e73fada571849ac98bd9c7f005c3f4f31",
     "https://esm.sh/html-encoding-sniffer@4.0.0?target=denonext": "d096f813febda0c56a0c54fa5aa1989383fe1923c94150e5b4cdcfa02187f301",
     "https://esm.sh/http-proxy-agent@7.0.2/denonext/http-proxy-agent.mjs": "1556b1f1ed4065b42820b9557da226cef428a34529593982ab0dda56b9cee3cf",

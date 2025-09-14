@@ -139,19 +139,19 @@ setup_provisioning_mode() {
     log_success "Provisioning mode set to: $PROVISIONING_MODE"
 }
 
-# Setup Gemini API key
-setup_gemini_key() {
+# Setup OpenRouter API key
+setup_openrouter_key() {
     echo
-    echo "Do you have a Gemini API key from Google AI Studio?"
-    echo "(You can get one at: https://makersuite.google.com/app/apikey)"
+    echo "Do you have an OpenRouter API key?"
+    echo "(You can get one at: https://openrouter.ai/keys)"
     echo
-    read -p "Enter your Gemini API key (or press Enter to skip): " GEMINI_API_KEY
+    read -p "Enter your OpenRouter API key (or press Enter to skip): " OPENROUTER_API_KEY
 
-    if [ -n "$GEMINI_API_KEY" ]; then
-        sed -i.bak "s/your-gemini-api-key/$GEMINI_API_KEY/g" .env
-        log_success "Gemini API key configured"
+    if [ -n "$OPENROUTER_API_KEY" ]; then
+        sed -i.bak "s/your-openrouter-api-key/$OPENROUTER_API_KEY/g" .env
+        log_success "OpenRouter API key configured"
     else
-        log_warning "No Gemini API key provided - some features may not work"
+        log_warning "No OpenRouter API key provided - some features may not work"
         log_info "You can add it later by editing the .env file"
     fi
 }
@@ -217,7 +217,7 @@ main() {
     # Setup components
     setup_gcp_config
     setup_provisioning_mode
-    setup_gemini_key
+    setup_openrouter_key
 
     # Test configuration
     test_configuration

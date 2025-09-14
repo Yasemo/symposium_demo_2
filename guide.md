@@ -6,7 +6,7 @@ This guide provides detailed implementation instructions for a Symposium demo th
 
 ## Demo Feature Scope with Isolates
 
-1. **Chat Interface**: Real-time conversation with Gemini 2.5 Flash API
+1. **Chat Interface**: Real-time conversation with OpenRouter API
 2. **Content Block Generation**: AI creates HTML/CSS/JS that executes in Deno isolates
 3. **Isolated Content Execution**: Each content block runs in its own secure isolate
 4. **Context Management**: Include/exclude chat messages and content block data
@@ -20,7 +20,7 @@ This guide provides detailed implementation instructions for a Symposium demo th
 - **Backend**: Deno HTTP server with WebSocket support
 - **Content Execution**: Deno Web Workers (isolates)
 - **Frontend**: Vanilla HTML, CSS, JavaScript
-- **AI Integration**: Google Gemini 2.5 Flash API
+- **AI Integration**: OpenRouter API
 - **Real-time Communication**: WebSockets for chat
 
 ## Project Structure
@@ -33,7 +33,7 @@ symposium-demo/
 │   ├── styles.css         # UI styling
 │   └── app.js            # Frontend JavaScript
 ├── src/
-│   ├── gemini-client.ts   # Gemini API integration
+│   ├── openrouter-client.ts   # OpenRouter API integration
 │   ├── chat-handler.ts    # WebSocket chat management
 │   ├── isolate-manager.ts # Deno isolate management
 │   ├── content-executor.ts # Content block execution in isolates

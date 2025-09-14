@@ -17,8 +17,11 @@
             <!-- Chat Interface -->
             <div class="chat-section">
                 <div class="chat-header">
-                    <h2>AI Chat</h2>
+                    <!-- <h2>AI Chat</h2> -->
                     <div class="chat-controls">
+                        <div class="chat-actions">
+                            <button id="clear-history-btn" class="secondary-button" title="Clear chat history">🗑️ Clear History</button>
+                        </div>
                         <div class="mode-toggle">
                             <button id="plan-mode-btn" class="mode-btn active">Plan Mode</button>
                             <button id="create-mode-btn" class="mode-btn">Create Mode</button>
@@ -28,6 +31,22 @@
                             <span id="status-text">Connecting...</span>
                         </div>
                     </div>
+                    <div class="model-selector">
+                            <div class="model-dropdown-container">
+                                <button id="model-selector-btn" class="model-selector-btn">
+                                    <span id="current-model">Loading...</span>
+                                    <span class="dropdown-arrow">▼</span>
+                                </button>
+                                <div id="model-dropdown" class="model-dropdown">
+                                    <div class="model-search">
+                                        <input type="text" id="model-search" placeholder="Search models..." />
+                                    </div>
+                                    <div id="model-list" class="model-list">
+                                        <!-- Models will be populated here -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                 </div>
 
                 <div class="chat-messages" id="chat-messages">
@@ -67,18 +86,8 @@
 
                 <div class="code-editors">
                     <div class="editor-section" data-lang="HTML">
-                        <h4>HTML</h4>
-                        <textarea id="html-editor" placeholder="Enter your HTML code..."></textarea>
-                    </div>
-
-                    <div class="editor-section" data-lang="CSS">
-                        <h4>CSS</h4>
-                        <textarea id="css-editor" placeholder="Enter your CSS styles..."></textarea>
-                    </div>
-
-                    <div class="editor-section" data-lang="JS">
-                        <h4>JavaScript</h4>
-                        <textarea id="js-editor" placeholder="Enter your JavaScript code..."></textarea>
+                        <h4>HTML Document</h4>
+                        <textarea id="html-editor" placeholder="Enter your complete HTML document with embedded styles and scripts..."></textarea>
                     </div>
 
                     <div class="data-viewer-section">

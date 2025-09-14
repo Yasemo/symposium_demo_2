@@ -13,8 +13,10 @@ export interface EnvironmentConfig {
   costLimit: number;
   port: number;
 
-  // Gemini AI
+  // AI Configuration
   geminiApiKey?: string;
+  openRouterApiKey?: string;
+  openRouterDefaultModel?: string;
 
   // Manual Service Configuration
   cloudSqlConnectionString?: string;
@@ -133,6 +135,12 @@ class EnvironmentLoader {
         break;
       case 'GEMINI_API_KEY':
         this.config.geminiApiKey = value;
+        break;
+      case 'OPENROUTER_API_KEY':
+        this.config.openRouterApiKey = value;
+        break;
+      case 'OPENROUTER_DEFAULT_MODEL':
+        this.config.openRouterDefaultModel = value;
         break;
       case 'CLOUD_SQL_CONNECTION_STRING':
         this.config.cloudSqlConnectionString = value;

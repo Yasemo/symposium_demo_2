@@ -1,4 +1,4 @@
-import { GeminiClient } from "./src/gemini-client.ts";
+import { OpenRouterClient } from "./src/openrouter-client.ts";
 import { SymposiumIsolateManager } from "./src/isolate-manager.ts";
 import { SymposiumContentExecutor } from "./src/content-executor.ts";
 import { SymposiumChatHandler } from "./src/chat-handler.ts";
@@ -24,6 +24,8 @@ console.log(`   🐛 Debug mode: ${envStatus.debugMode ? '✅' : '❌'}`);
 // Extract configuration values
 const {
   geminiApiKey,
+  openRouterApiKey,
+  openRouterDefaultModel,
   port,
   gcpProjectId,
   gcpRegion,
@@ -46,9 +48,8 @@ console.log(`   🔄 Provisioning Mode: ${provisioningMode}`);
 console.log(`   💰 Cost Limit: $${costLimit}/month`);
 console.log(`   🌐 Port: ${port}`);
 
-// Fallback for Gemini API key if not provided
-const GEMINI_API_KEY = geminiApiKey || "AIzaSyDNmaBk3Vb4zHd5DTTxusXWMYrfHUDIo88";
-console.log(`🤖 Gemini API: ${geminiApiKey ? '✅ Configured' : '⚠️  Using fallback'}`);
+// OpenRouter API configuration
+console.log(`🚀 OpenRouter API: ${openRouterApiKey ? '✅ Configured' : '❌ Not configured'}`);
 
 // Global service managers
 let databaseManager: DatabaseManager;
@@ -58,22 +59,29 @@ let provisioner: GCPProvisioner;
 let isolateManager: SymposiumIsolateManager;
 let contentExecutor: SymposiumContentExecutor;
 let chatHandler: SymposiumChatHandler;
-let geminiClient: GeminiClient;
+let openRouterClient: OpenRouterClient | null = null;
 
 // Initialize core components with auto-provisioning
 async function initializeServices() {
   console.log('\n🚀 Initializing Symposium Demo Services...');
   console.log('=' .repeat(50));
 
-  // Initialize Gemini client
-  console.log('🤖 Initializing Gemini AI client...');
-  try {
-    geminiClient = new GeminiClient({
-      apiKey: GEMINI_API_KEY
-    });
-    console.log('   ✅ Gemini client initialized');
-  } catch (error) {
-    console.error('   ❌ Gemini client initialization failed:', error);
+  // Initialize OpenRouter client
+  console.log('🚀 Initializing OpenRouter AI client...');
+  if (openRouterApiKey) {
+    try {
+      openRouterClient = new OpenRouterClient({
+        apiKey: openRouterApiKey,
+        defaultModel: openRouterDefaultModel || 'openai/gpt-4o-mini'
+      });
+      console.log('   ✅ OpenRouter client initialized');
+      console.log(`   📋 Default model: ${openRouterDefaultModel || 'openai/gpt-4o-mini'}`);
+    } catch (error) {
+      console.error('   ❌ OpenRouter client initialization failed:', error);
+      openRouterClient = null;
+    }
+  } else {
+    console.log('   ⚠️  OpenRouter API key not configured, skipping initialization');
   }
 
   // Determine service strategy
@@ -145,22 +153,27 @@ async function initializeServices() {
 
   // Initialize chat handler
   console.log('💬 Initializing Chat Handler...');
-  chatHandler = new SymposiumChatHandler(geminiClient);
+  chatHandler = new SymposiumChatHandler(openRouterClient, contentExecutor, databaseManager);
   console.log('   ✅ Chat handler initialized');
+  console.log(`   🤖 AI Provider: OpenRouter ${openRouterClient ? '✅' : '❌'}`);
+
+  // Load saved chat sessions
+  console.log('💬 Loading saved chat sessions...');
+  await chatHandler.loadAllSessions();
+  console.log('   ✅ Chat sessions loaded from database');
 
   console.log('\n' + '=' .repeat(50));
   console.log('✅ All Services Initialized Successfully!');
   console.log('📊 Service Status Summary:');
   console.log(`   🔌 Database: ${databaseManager.getConnectionInfo().type} (${databaseManager.getConnectionInfo().status})`);
   console.log(`   ⚡ Isolates: ${isolateStats.activeIsolates}/${isolateStats.maxIsolates} active`);
-  console.log(`   🤖 AI: ${geminiClient ? 'Connected' : 'Disconnected'}`);
+  console.log(`   🤖 AI: OpenRouter ${openRouterClient ? 'Connected' : 'Disconnected'}`);
   console.log('=' .repeat(50) + '\n');
 }
 
 // Server configuration
 interface ServerConfig {
   port: number;
-  geminiApiKey: string;
   maxConcurrentIsolates: number;
   isolateTimeoutMs: number;
 }
@@ -192,8 +205,23 @@ interface ExecutionResult {
 function handleWebSocket(socket: WebSocket) {
   console.log("WebSocket connection established");
 
-  socket.addEventListener("open", () => {
+  socket.addEventListener("open", async () => {
     console.log("Client connected!");
+
+    // Send chat history to the newly connected client
+    try {
+      const history = await chatHandler.getChatHistory('default');
+      if (history.length > 0) {
+        socket.send(JSON.stringify({
+          type: "chat_history",
+          sessionId: 'default',
+          history
+        }));
+        console.log(`Sent ${history.length} chat messages to new client`);
+      }
+    } catch (error) {
+      console.error("Failed to send chat history to new client:", error);
+    }
   });
 
   socket.addEventListener("message", (event) => {
@@ -223,6 +251,27 @@ function handleWebSocket(socket: WebSocket) {
           break;
         case "terminate_content_block":
           handleTerminateContentBlock(socket, message);
+          break;
+        case "get_content_versions":
+          handleGetContentVersions(socket, message);
+          break;
+        case "undo_content_block":
+          handleUndoContentBlock(socket, message);
+          break;
+        case "redo_content_block":
+          handleRedoContentBlock(socket, message);
+          break;
+        case "get_available_models":
+          handleGetAvailableModels(socket, message);
+          break;
+        case "change_model":
+          handleChangeModel(socket, message);
+          break;
+        case "get_chat_history":
+          handleGetChatHistory(socket, message);
+          break;
+        case "clear_chat_history":
+          handleClearChatHistory(socket, message);
           break;
         default:
           console.log("Unknown message type:", message.type);
@@ -265,16 +314,26 @@ async function handleContentExecution(socket: WebSocket, message: any) {
     const { blockId, code } = message;
 
     let executionCode: ContentBlockCode;
+    let changeType: 'execution' | 'ai_generated' = 'execution';
+    let metadata: any = {};
 
-    // If no code provided, generate content using Gemini
+    // If no code provided, generate content using OpenRouter
     if (!code || (!code.html && !code.css && !code.javascript)) {
       console.log("Generating content block for execution");
-      const contentBlock = await geminiClient.generateContentBlock("Create an interactive content block");
+      if (!openRouterClient) {
+        throw new Error("OpenRouter client not available for content generation");
+      }
+      const contentBlock = await openRouterClient.generateContentBlock("Create an interactive content block");
 
       executionCode = {
         html: contentBlock.html,
         css: contentBlock.css,
         javascript: contentBlock.javascript
+      };
+      changeType = 'ai_generated';
+      metadata = {
+        description: 'AI-generated content block',
+        author: 'ai'
       };
     } else {
       // Use provided code
@@ -283,11 +342,15 @@ async function handleContentExecution(socket: WebSocket, message: any) {
         css: code.css || "",
         javascript: code.javascript || ""
       };
+      metadata = {
+        description: 'User-executed content block',
+        author: 'user'
+      };
     }
 
-    // Execute content block in isolate
+    // Execute content block in isolate with version tracking
     console.log(`Executing content block ${blockId} in isolate`);
-    const result = await contentExecutor.executeContentBlock(blockId, executionCode);
+    const result = await contentExecutor.executeContentBlockWithVersion(blockId, executionCode, changeType, metadata);
 
     socket.send(JSON.stringify({
       type: "content_executed",
@@ -308,12 +371,15 @@ async function handleContentExecution(socket: WebSocket, message: any) {
 // Content update handler
 async function handleContentUpdate(socket: WebSocket, message: any) {
   try {
-    const { blockId, updates } = message;
+    const { blockId, updates, changeType = 'user_edit', author = 'user' } = message;
 
     console.log(`Updating content block ${blockId} in isolate`);
 
-    // Update content block in isolate
-    const result = await contentExecutor.updateContentBlock(blockId, updates);
+    // Update content block in isolate with version tracking
+    const result = await contentExecutor.updateContentBlockWithVersion(blockId, updates, changeType, {
+      description: `Content block updated by ${author}`,
+      author: author
+    });
 
     socket.send(JSON.stringify({
       type: "content_updated",
@@ -451,6 +517,254 @@ async function handleTerminateContentBlock(socket: WebSocket, message: any) {
     socket.send(JSON.stringify({
       type: "error",
       error: `Failed to terminate content block: ${errorMessage}`
+    }));
+  }
+}
+
+// Handle get content versions requests
+async function handleGetContentVersions(socket: WebSocket, message: any) {
+  try {
+    const { blockId } = message;
+
+    console.log(`Getting versions for content block: ${blockId}`);
+
+    // Get version history from content executor
+    const versions = await contentExecutor.getContentBlockVersions(blockId);
+
+    socket.send(JSON.stringify({
+      type: "content_versions",
+      blockId,
+      versions
+    }));
+
+    console.log(`Sent ${versions.length} versions for block ${blockId}`);
+
+  } catch (error) {
+    console.error("Get content versions error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "error",
+      error: `Failed to get content versions: ${errorMessage}`
+    }));
+  }
+}
+
+// Handle undo content block requests
+async function handleUndoContentBlock(socket: WebSocket, message: any) {
+  try {
+    const { blockId, targetVersionId } = message;
+
+    console.log(`Undoing content block: ${blockId}${targetVersionId ? ` to version ${targetVersionId}` : ' to previous version'}`);
+
+    // Undo the content block
+    const result = await contentExecutor.undoContentBlock(blockId, targetVersionId);
+
+    if (result) {
+      socket.send(JSON.stringify({
+        type: "content_undone",
+        blockId,
+        result,
+        targetVersionId
+      }));
+
+      console.log(`Successfully undid block ${blockId}${targetVersionId ? ` to version ${targetVersionId}` : ' to previous version'}`);
+    } else {
+      // Check if it's because there's only one version
+      const versions = await contentExecutor.getContentBlockVersions(blockId);
+      const errorMessage = versions.length === 1
+        ? `Cannot undo: This is the only version of the content block. Make some changes first to create additional versions.`
+        : `Failed to undo content block: No versions available or undo failed`;
+
+      socket.send(JSON.stringify({
+        type: "error",
+        error: errorMessage
+      }));
+    }
+
+  } catch (error) {
+    console.error("Undo content block error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "error",
+      error: `Failed to undo content block: ${errorMessage}`
+    }));
+  }
+}
+
+// Handle redo content block requests
+async function handleRedoContentBlock(socket: WebSocket, message: any) {
+  try {
+    const { blockId } = message;
+
+    console.log(`Redoing content block: ${blockId}`);
+
+    // Check if redo is available
+    const canRedo = await contentExecutor.canRedo(blockId);
+    if (!canRedo) {
+      socket.send(JSON.stringify({
+        type: "error",
+        error: `No redo available for block ${blockId}`
+      }));
+      return;
+    }
+
+    // Redo the content block
+    const result = await contentExecutor.redoContentBlock(blockId);
+
+    if (result) {
+      socket.send(JSON.stringify({
+        type: "content_redone",
+        blockId,
+        result
+      }));
+
+      console.log(`Successfully redid block ${blockId}`);
+    } else {
+      socket.send(JSON.stringify({
+        type: "error",
+        error: `Failed to redo content block: Redo operation failed`
+      }));
+    }
+
+  } catch (error) {
+    console.error("Redo content block error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "error",
+      error: `Failed to redo content block: ${errorMessage}`
+    }));
+  }
+}
+
+// Handle get available models requests
+async function handleGetAvailableModels(socket: WebSocket, message: any) {
+  try {
+    console.log('Getting available models from OpenRouter');
+
+    if (!openRouterClient) {
+      socket.send(JSON.stringify({
+        type: "error",
+        error: "OpenRouter client not available"
+      }));
+      return;
+    }
+
+    const models = await openRouterClient.getAvailableModels();
+
+    socket.send(JSON.stringify({
+      type: "available_models",
+      models: models
+    }));
+
+    console.log(`Sent ${models.length} available models to frontend`);
+
+  } catch (error) {
+    console.error("Get available models error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "error",
+      error: `Failed to get available models: ${errorMessage}`
+    }));
+  }
+}
+
+// Handle change model requests
+async function handleChangeModel(socket: WebSocket, message: any) {
+  try {
+    const { model } = message;
+
+    console.log(`Changing model to: ${model}`);
+
+    if (!openRouterClient) {
+      socket.send(JSON.stringify({
+        type: "error",
+        error: "OpenRouter client not available"
+      }));
+      return;
+    }
+
+    // Update the model in the OpenRouter client with persistence
+    await openRouterClient.setCurrentModel(model);
+
+    socket.send(JSON.stringify({
+      type: "model_changed",
+      model: model,
+      success: true
+    }));
+
+    console.log(`Successfully changed and persisted model to: ${model}`);
+
+  } catch (error) {
+    console.error("Change model error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "model_changed",
+      model: message.model,
+      success: false,
+      error: errorMessage
+    }));
+  }
+}
+
+// Handle get chat history requests
+async function handleGetChatHistory(socket: WebSocket, message: any) {
+  try {
+    const { sessionId = 'default' } = message;
+
+    console.log(`Getting chat history for session: ${sessionId}`);
+
+    // Get chat history from chat handler
+    const history = await chatHandler.getChatHistory(sessionId);
+
+    socket.send(JSON.stringify({
+      type: "chat_history",
+      sessionId,
+      history
+    }));
+
+    console.log(`Sent ${history.length} chat messages for session ${sessionId}`);
+
+  } catch (error) {
+    console.error("Get chat history error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "error",
+      error: `Failed to get chat history: ${errorMessage}`
+    }));
+  }
+}
+
+// Handle clear chat history requests
+async function handleClearChatHistory(socket: WebSocket, message: any) {
+  try {
+    const { sessionId = 'default' } = message;
+
+    console.log(`Clearing chat history for session: ${sessionId}`);
+
+    // Clear chat history through chat handler
+    const success = await chatHandler.clearChatHistory(sessionId);
+
+    if (success) {
+      socket.send(JSON.stringify({
+        type: "chat_history_cleared",
+        sessionId,
+        success: true
+      }));
+
+      console.log(`Successfully cleared chat history for session ${sessionId}`);
+    } else {
+      socket.send(JSON.stringify({
+        type: "error",
+        error: `Failed to clear chat history for session ${sessionId}`
+      }));
+    }
+
+  } catch (error) {
+    console.error("Clear chat history error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "error",
+      error: `Failed to clear chat history: ${errorMessage}`
     }));
   }
 }
@@ -636,7 +950,6 @@ if (import.meta.main) {
 
   const serverConfig: ServerConfig = {
     port: port,
-    geminiApiKey: GEMINI_API_KEY,
     maxConcurrentIsolates: 10,
     isolateTimeoutMs: 30000
   };

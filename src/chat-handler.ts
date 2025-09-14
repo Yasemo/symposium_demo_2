@@ -1,7 +1,15 @@
 // Chat Handler for Symposium Demo
 // Manages WebSocket chat communication and context
 
-import { GeminiClient } from './gemini-client.ts';
+import { OpenRouterClient } from './openrouter-client.ts';
+import { SymposiumContentExecutor } from './content-executor.ts';
+import { DatabaseManager } from './database-manager.ts';
+
+interface ContentBlockCode {
+  html: string;
+  css: string;
+  javascript: string;
+}
 
 interface ChatMessage {
   id: string;
@@ -20,14 +28,27 @@ interface ChatSession {
 }
 
 export class SymposiumChatHandler {
-  private geminiClient: GeminiClient;
+  private openRouterClient: OpenRouterClient | null = null;
+  private contentExecutor: SymposiumContentExecutor | null = null;
+  private databaseManager: DatabaseManager | null = null;
   private sessions = new Map<string, ChatSession>();
   private maxSessionAge = 30 * 60 * 1000; // 30 minutes
   private maxMessagesPerSession = 100;
 
-  constructor(geminiClient: GeminiClient) {
-    this.geminiClient = geminiClient;
+  constructor(
+    openRouterClient: OpenRouterClient | null = null,
+    contentExecutor: SymposiumContentExecutor | null = null,
+    databaseManager: DatabaseManager | null = null
+  ) {
+    this.openRouterClient = openRouterClient;
+    this.contentExecutor = contentExecutor;
+    this.databaseManager = databaseManager;
     this.startCleanupInterval();
+  }
+
+  // Get the current AI client (only OpenRouter now)
+  private getCurrentClient() {
+    return this.openRouterClient;
   }
 
   // Handle incoming chat message
@@ -38,6 +59,7 @@ export class SymposiumChatHandler {
       const chatMode = message.mode || 'plan'; // 'plan' or 'create'
       const editingContext = message.editingContext; // Context when editing a block
       const selectedBlockContext = message.selectedBlockContext; // Context when block is selected
+      const visibleMessages = message.visibleMessages || []; // Filtered message history from frontend
 
       if (!userMessage.trim()) {
         this.sendError(socket, 'Empty message');
@@ -45,7 +67,7 @@ export class SymposiumChatHandler {
       }
 
       // Get or create session
-      const session = this.getOrCreateSession(sessionId);
+      const session = await this.getOrCreateSession(sessionId);
 
       // Add user message to session
       const userChatMessage: ChatMessage = {
@@ -64,8 +86,14 @@ export class SymposiumChatHandler {
         // User has selected a block for AI editing - provide contextual modifications
         console.log(`AI Editing Mode: Modifying selected block ${selectedBlockContext.blockId} with "${userMessage}"`);
 
-        const modifiedBlock = await this.geminiClient.generateContentBlock(
-          this.buildEditingPrompt(userMessage, selectedBlockContext.currentCode, selectedBlockContext.blockId)
+        const currentClient = this.getCurrentClient();
+        if (!currentClient) {
+          throw new Error('No AI client available');
+        }
+        const modifiedBlock = await currentClient.generateContentBlock(
+          this.buildEditingPrompt(userMessage, selectedBlockContext.currentCode, selectedBlockContext.blockId),
+          undefined, // model
+          true // isEditing
         );
 
         botResponse = `I've modified your selected content block with the requested changes!
@@ -77,15 +105,41 @@ export class SymposiumChatHandler {
 
 The content block has been updated and re-executed in the isolate!`;
 
-        // Send content block update message to frontend
-        this.sendContentBlockUpdate(socket, sessionId, selectedBlockContext.blockId, modifiedBlock);
+        // Update content block through content executor with proper versioning
+        if (this.contentExecutor) {
+          const updates: ContentBlockCode = {
+            html: modifiedBlock.html,
+            css: modifiedBlock.css,
+            javascript: modifiedBlock.javascript
+          };
+
+          await this.contentExecutor.updateContentBlockWithVersion(
+            selectedBlockContext.blockId,
+            updates,
+            'ai_modified',
+            {
+              description: `AI modified content block: ${userMessage}`,
+              author: 'ai'
+            }
+          );
+          console.log(`AI modification versioned for block ${selectedBlockContext.blockId}`);
+        } else {
+          console.error('Content executor not available for AI editing');
+          throw new Error('Content executor not available');
+        }
 
       } else if (editingContext) {
         // User is editing an existing block in modal (fallback) - provide contextual modifications
         console.log(`Modal Editing Mode: Modifying block ${editingContext.blockId} with "${userMessage}"`);
 
-        const modifiedBlock = await this.geminiClient.generateContentBlock(
-          this.buildEditingPrompt(userMessage, editingContext.currentCode)
+        const currentClient = this.getCurrentClient();
+        if (!currentClient) {
+          throw new Error('No AI client available');
+        }
+        const modifiedBlock = await currentClient.generateContentBlock(
+          this.buildEditingPrompt(userMessage, editingContext.currentCode),
+          undefined, // model
+          true // isEditing
         );
 
         botResponse = `I've modified your content block with the requested changes!
@@ -97,13 +151,47 @@ The content block has been updated and re-executed in the isolate!`;
 
 The content block has been updated and re-executed in the isolate!`;
 
-        // Send content block update message to frontend
-        this.sendContentBlockUpdate(socket, sessionId, editingContext.blockId, modifiedBlock);
+        // Update content block through content executor with proper versioning
+        if (this.contentExecutor) {
+          const updates: ContentBlockCode = {
+            html: modifiedBlock.html,
+            css: modifiedBlock.css,
+            javascript: modifiedBlock.javascript
+          };
+
+          await this.contentExecutor.updateContentBlockWithVersion(
+            editingContext.blockId,
+            updates,
+            'ai_modified',
+            {
+              description: `AI modified content block: ${userMessage}`,
+              author: 'ai'
+            }
+          );
+          console.log(`AI modification versioned for block ${editingContext.blockId}`);
+        } else {
+          console.error('Content executor not available for AI editing');
+          throw new Error('Content executor not available');
+        }
 
       } else if (chatMode === 'create') {
         // Create Mode: Always generate content, respond only with code
         console.log(`Create Mode: Generating content for "${userMessage}"`);
-        const contentBlock = await this.geminiClient.generateContentBlock(userMessage);
+
+        // Build context for better content generation
+        const contextMessages = this.buildContextForAI(session, visibleMessages);
+
+        const currentClient = this.getCurrentClient();
+        if (!currentClient) {
+          throw new Error('No AI client available');
+        }
+
+        // Include context in the prompt for better generation
+        const contextualPrompt = contextMessages.length > 0
+          ? `${userMessage}\n\nConversation context:\n${contextMessages.map(m => `${m.role}: ${m.content}`).join('\n')}`
+          : userMessage;
+
+        const contentBlock = await currentClient.generateContentBlock(contextualPrompt);
 
         // In Create Mode, just send the content block without chat response
         botResponse = `Content block created and executed!`;
@@ -121,39 +209,34 @@ The content block has been updated and re-executed in the isolate!`;
         this.sendContentBlock(socket, sessionId, contentBlock);
 
       } else {
-        // Plan Mode: Regular chat with optional content generation
+        // Plan Mode: Conversational AI - NO content generation
+        console.log(`Plan Mode: Providing guidance for "${userMessage}"`);
+
+        // Check if user is asking about content creation
         const isContentRequest = this.isContentGenerationRequest(userMessage);
 
         if (isContentRequest) {
-          // Generate content block
-          console.log(`Plan Mode: Generating content block for "${userMessage}"`);
-          const contentBlock = await this.geminiClient.generateContentBlock(userMessage);
+          // In Plan Mode, guide user to Create Mode instead of generating content
+          botResponse = `I see you'd like to create a content block! In Plan Mode, I can help you design and plan your content block, but I won't generate the actual code here.
 
-          botResponse = `I've created a content block for you: ${contentBlock.explanation}
+## What I can help with in Plan Mode:
+- **Design planning**: Help you think through the user experience and functionality
+- **Technical guidance**: Explain how different features work in Symposium Demo
+- **Best practices**: Share tips for creating effective content blocks
+- **API recommendations**: Suggest which data persistence patterns to use
 
-**Generated Code:**
-• HTML: ${contentBlock.html.substring(0, 100)}${contentBlock.html.length > 100 ? '...' : ''}
-• CSS: ${contentBlock.css ? 'Included' : 'None'}
-• JavaScript: ${contentBlock.javascript ? 'Included' : 'None'}
+## To create the actual content block:
+Please switch to **Create Mode** (click the "Create Mode" button above) and I'll generate the complete HTML/CSS/JavaScript code for you.
 
-The content block has been automatically added to your workspace and executed in an isolate!`;
-
-          // Store content block in session context
-          session.context.set('lastGeneratedBlock', {
-            html: contentBlock.html,
-            css: contentBlock.css,
-            javascript: contentBlock.javascript,
-            explanation: contentBlock.explanation,
-            timestamp: Date.now()
-          });
-
-          // Send content block creation message to frontend
-          this.sendContentBlock(socket, sessionId, contentBlock);
-
+Would you like me to help you plan out what this content block should include first?`;
         } else {
-          // Regular chat response with context
-          const contextMessages = this.buildContextForAI(session);
-          botResponse = await this.geminiClient.chat(userMessage, contextMessages);
+          // Regular conversational response with context
+          const contextMessages = this.buildContextForAI(session, visibleMessages);
+          const currentClient = this.getCurrentClient();
+          if (!currentClient) {
+            throw new Error('No AI client available');
+          }
+          botResponse = await currentClient.chat(userMessage, contextMessages);
         }
       }
 
@@ -169,6 +252,9 @@ The content block has been automatically added to your workspace and executed in
 
       // Trim old messages if needed
       this.trimSessionMessages(session);
+
+      // Save session to database
+      await this.saveSession(session);
 
       // Send response
       this.sendResponse(socket, {
@@ -187,28 +273,38 @@ The content block has been automatically added to your workspace and executed in
   }
 
   // Get or create chat session
-  private getOrCreateSession(sessionId: string): ChatSession {
+  private async getOrCreateSession(sessionId: string): Promise<ChatSession> {
     let session = this.sessions.get(sessionId);
 
     if (!session) {
-      session = {
-        id: sessionId,
-        messages: [],
-        context: new Map(),
-        createdAt: Date.now(),
-        lastActivity: Date.now()
-      };
+      // Try to load from database first
+      const savedSession = await this.loadSession(sessionId);
+      if (savedSession) {
+        session = savedSession;
+        this.sessions.set(sessionId, session);
+        console.log(`Restored session ${sessionId} from database with ${session.messages.length} messages`);
+      } else {
+        // Create new session
+        session = {
+          id: sessionId,
+          messages: [],
+          context: new Map(),
+          createdAt: Date.now(),
+          lastActivity: Date.now()
+        };
 
-      // Add welcome message
-      const welcomeMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        type: 'system',
-        content: 'Welcome to Symposium Demo! I can help you create interactive content blocks. Try asking me to "create a button" or "make a calculator".',
-        timestamp: Date.now()
-      };
+        // Add welcome message
+        const welcomeMessage: ChatMessage = {
+          id: crypto.randomUUID(),
+          type: 'system',
+          content: 'Welcome to Symposium Demo! I can help you create interactive content blocks. Try asking me to "create a button" or "make a calculator".',
+          timestamp: Date.now()
+        };
 
-      session.messages.push(welcomeMessage);
-      this.sessions.set(sessionId, session);
+        session.messages.push(welcomeMessage);
+        this.sessions.set(sessionId, session);
+        console.log(`Created new session ${sessionId}`);
+      }
     }
 
     return session;
@@ -227,9 +323,19 @@ The content block has been automatically added to your workspace and executed in
   }
 
   // Build context for AI from session history
-  private buildContextForAI(session: ChatSession): Array<{role: string, content: string}> {
-    // Get last 10 messages for context
+  private buildContextForAI(session: ChatSession, visibleMessages?: any[]): Array<{role: string, content: string}> {
+    // If visibleMessages are provided from frontend, use them instead of full session history
+    if (visibleMessages && visibleMessages.length > 0) {
+      console.log(`Using ${visibleMessages.length} visible messages from frontend for context`);
+      return visibleMessages.map(msg => ({
+        role: msg.sender === 'user' ? 'user' : 'model',
+        content: msg.content
+      }));
+    }
+
+    // Fallback to session history (last 10 messages)
     const recentMessages = session.messages.slice(-10);
+    console.log(`Using ${recentMessages.length} messages from session history for context`);
 
     return recentMessages.map(msg => ({
       role: msg.type === 'user' ? 'user' : 'model',
@@ -414,5 +520,128 @@ Make sure to:
   getSessionContext(sessionId: string): Map<string, any> | null {
     const session = this.sessions.get(sessionId);
     return session ? session.context : null;
+  }
+
+  // Database persistence methods
+  private async saveSession(session: ChatSession): Promise<void> {
+    if (!this.databaseManager) {
+      console.warn('Database manager not available, skipping session save');
+      return;
+    }
+
+    try {
+      const sessionKey = `chat_session:${session.id}`;
+      const sessionData = {
+        id: session.id,
+        messages: session.messages,
+        context: Array.from(session.context.entries()), // Convert Map to array for storage
+        createdAt: session.createdAt,
+        lastActivity: session.lastActivity
+      };
+
+      await this.databaseManager.set(sessionKey, sessionData);
+      console.log(`Saved chat session ${session.id} with ${session.messages.length} messages`);
+    } catch (error) {
+      console.error('Failed to save chat session:', error);
+    }
+  }
+
+  private async loadSession(sessionId: string): Promise<ChatSession | null> {
+    if (!this.databaseManager) {
+      console.warn('Database manager not available, cannot load session');
+      return null;
+    }
+
+    try {
+      const sessionKey = `chat_session:${sessionId}`;
+      const sessionData = await this.databaseManager.get(sessionKey);
+
+      if (!sessionData) {
+        console.log(`No saved session found for ${sessionId}`);
+        return null;
+      }
+
+      // Reconstruct the session
+      const session: ChatSession = {
+        id: sessionData.id,
+        messages: sessionData.messages || [],
+        context: new Map(sessionData.context || []), // Convert array back to Map
+        createdAt: sessionData.createdAt,
+        lastActivity: sessionData.lastActivity
+      };
+
+      console.log(`Loaded chat session ${sessionId} with ${session.messages.length} messages`);
+      return session;
+    } catch (error) {
+      console.error('Failed to load chat session:', error);
+      return null;
+    }
+  }
+
+  // Get chat history for a session (used when sending to frontend)
+  async getChatHistory(sessionId: string): Promise<ChatMessage[]> {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      return session.messages;
+    }
+
+    // Try to load from database
+    const savedSession = await this.loadSession(sessionId);
+    return savedSession ? savedSession.messages : [];
+  }
+
+  // Clear chat history for a session
+  async clearChatHistory(sessionId: string): Promise<boolean> {
+    try {
+      // Remove from memory
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        // Keep only the welcome message
+        const welcomeMessage = session.messages.find(msg => msg.type === 'system');
+        session.messages = welcomeMessage ? [welcomeMessage] : [];
+        session.lastActivity = Date.now();
+      }
+
+      // Remove from database
+      if (this.databaseManager) {
+        const sessionKey = `chat_session:${sessionId}`;
+        await this.databaseManager.delete(sessionKey);
+      }
+
+      console.log(`Cleared chat history for session ${sessionId}`);
+      return true;
+    } catch (error) {
+      console.error('Failed to clear chat history:', error);
+      return false;
+    }
+  }
+
+  // Load all saved sessions on startup
+  async loadAllSessions(): Promise<void> {
+    if (!this.databaseManager) {
+      console.log('Database manager not available, skipping session loading');
+      return;
+    }
+
+    try {
+      console.log('Loading saved chat sessions from database...');
+      const sessionKeys = await this.databaseManager.list(['chat_session:']);
+
+      let loadedCount = 0;
+      for (const entry of sessionKeys) {
+        if (entry.key && typeof entry.key === 'string') {
+          const sessionId = entry.key.replace('chat_session:', '');
+          const session = await this.loadSession(sessionId);
+          if (session) {
+            this.sessions.set(sessionId, session);
+            loadedCount++;
+          }
+        }
+      }
+
+      console.log(`Loaded ${loadedCount} chat sessions from database`);
+    } catch (error) {
+      console.error('Failed to load saved sessions:', error);
+    }
   }
 }

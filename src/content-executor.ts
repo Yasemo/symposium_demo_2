@@ -106,8 +106,22 @@ interface ExecutionResult {
 
 interface ContentBlockCode {
   html: string;
-  css: string;
-  javascript: string;
+  css?: string; // Optional for unified HTML documents
+  javascript?: string; // Optional for unified HTML documents
+}
+
+interface ContentBlockVersion {
+  versionId: number;
+  timestamp: number;
+  changeType: 'user_edit' | 'ai_generated' | 'ai_modified' | 'execution' | 'undo' | 'redo';
+  code: ContentBlockCode;
+  metadata: {
+    description?: string;
+    author?: 'user' | 'ai' | 'system';
+    previousVersionId?: number;
+    executionResult?: ExecutionResult;
+    undoneVersionId?: number; // For redo functionality
+  };
 }
 
 export class SymposiumContentExecutor implements ContentExecutor {
@@ -329,35 +343,99 @@ export class SymposiumContentExecutor implements ContentExecutor {
   }
 
   private generateHTMLOutput(result: ExecutionResult): string {
-    // Create complete HTML document for iframe display
-    const css = result.css || '';
-    const html = result.html || '<p>Content block executed successfully</p>';
-    const javascript = result.javascript || '';
+    // For unified HTML documents, use the HTML directly if it's a complete document
+    if (result.html && result.html.trim().startsWith('<!DOCTYPE html>')) {
+      // It's a complete HTML document, inject the demoAPI script
+      const htmlContent = result.html;
 
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-          body {
-            font-family: system-ui, -apple-system, sans-serif;
-            margin: 0;
-            padding: 16px;
-            line-height: 1.6;
-          }
-          ${css}
-        </style>
-      </head>
-      <body>
-        ${html}
+      // Insert the demoAPI script before the closing </body> tag
+      const demoAPIScript = `
         <script>
-          ${javascript}
+          // Demo API for content blocks - communicates with parent window
+          window.demoAPI = {
+            async saveData(key, value) {
+              return await this._callAPI('saveData', { key, value });
+            },
+
+            async getData(key) {
+              return await this._callAPI('getData', { key });
+            },
+
+            async deleteData(key) {
+              return await this._callAPI('deleteData', { key });
+            },
+
+            async _callAPI(method, params) {
+              return new Promise((resolve, reject) => {
+                const callId = Date.now() + Math.random();
+
+                const handleMessage = (event) => {
+                  if (event.data.type === 'apiResponse' && event.data.callId === callId) {
+                    window.removeEventListener('message', handleMessage);
+                    if (event.data.error) {
+                      reject(new Error(event.data.error));
+                    } else {
+                      resolve(event.data.result);
+                    }
+                  }
+                };
+
+                window.addEventListener('message', handleMessage);
+
+                // Send API call to parent window
+                window.parent.postMessage({
+                  type: 'apiCall',
+                  blockId: 'BLOCK_ID_PLACEHOLDER',
+                  method,
+                  params,
+                  callId
+                }, '*');
+
+                // Timeout after 10 seconds
+                setTimeout(() => {
+                  window.removeEventListener('message', handleMessage);
+                  reject(new Error('API call timeout'));
+                }, 10000);
+              });
+            }
+          };
         </script>
-      </body>
-      </html>
-    `.trim();
+      `;
+
+      // Replace the placeholder and inject the demoAPI script before the closing </body> tag
+      const scriptWithBlockId = demoAPIScript.replace('BLOCK_ID_PLACEHOLDER', blockId);
+      return htmlContent.replace('</body>', scriptWithBlockId + '</body>');
+    } else {
+      // Fallback for legacy format - construct HTML from separate parts
+      const css = result.css || '';
+      const html = result.html || '<p>Content block executed successfully</p>';
+      const javascript = result.javascript || '';
+
+      return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body {
+              font-family: system-ui, -apple-system, sans-serif;
+              margin: 0;
+              padding: 16px;
+              line-height: 1.6;
+            }
+            ${css}
+          </style>
+        </head>
+        <body>
+          ${html}
+          <script>
+            ${javascript}
+          </script>
+        </body>
+        </html>
+      `.trim();
+    }
   }
 
   // Get execution statistics
@@ -728,11 +806,403 @@ export class SymposiumContentExecutor implements ContentExecutor {
         await this.kv.delete(entry.key);
       }
 
+      // Delete all version entries
+      const versionEntries = this.kv.list({ prefix: ['versions', blockId] });
+      for await (const entry of versionEntries) {
+        await this.kv.delete(entry.key);
+      }
+
       console.log(`🗑️ Deleted content block ${blockId} from database`);
       return true;
     } catch (error) {
       console.error(`Failed to delete content block ${blockId} from database:`, error);
       return false;
     }
+  }
+
+  // VERSION HISTORY AND UNDO FUNCTIONALITY
+
+  // Create and save a new version
+  private async createVersion(
+    blockId: string,
+    code: ContentBlockCode,
+    changeType: ContentBlockVersion['changeType'],
+    metadata: Partial<ContentBlockVersion['metadata']> = {}
+  ): Promise<number> {
+    if (!this.kv) {
+      console.warn('KV not available, cannot create version');
+      return -1;
+    }
+
+    try {
+      // Get the next version ID
+      const versionId = await this.getNextVersionId(blockId);
+      console.log(`🔢 Next version ID for ${blockId}: ${versionId}`);
+
+      // Get the previous version ID
+      const previousVersionId = versionId > 1 ? versionId - 1 : undefined;
+
+      const version: ContentBlockVersion = {
+        versionId,
+        timestamp: Date.now(),
+        changeType,
+        code: { ...code }, // Clone the code
+        metadata: {
+          ...metadata,
+          previousVersionId
+        }
+      };
+
+      console.log(`📦 Version data for ${blockId} v${versionId}:`, {
+        changeType,
+        codeLength: JSON.stringify(code).length,
+        hasMetadata: !!metadata,
+        author: metadata.author
+      });
+
+      // Compress version data if large
+      const versionJson = JSON.stringify(version);
+      if (versionJson.length > 30000) { // Compress if > 30KB
+        console.log(`🗜️ Compressing version ${versionId} for block ${blockId}`);
+        const compressedData = await compressText(versionJson);
+        await this.kv.set(['versions', blockId, versionId], {
+          compressed: true,
+          data: compressedData,
+          originalSize: versionJson.length,
+          compressedSize: compressedData.length
+        });
+      } else {
+        await this.kv.set(['versions', blockId, versionId], version);
+      }
+
+      console.log(`✅ Successfully stored version ${versionId} for block ${blockId} in KV`);
+      console.log(`📝 Created version ${versionId} for block ${blockId} (${changeType})`);
+      return versionId;
+    } catch (error) {
+      console.error(`❌ Failed to create version for block ${blockId}:`, error);
+      return -1;
+    }
+  }
+
+  // Get the next version ID for a block
+  private async getNextVersionId(blockId: string): Promise<number> {
+    if (!this.kv) return 1;
+
+    try {
+      const versions = this.kv.list({ prefix: ['versions', blockId] });
+      let maxVersionId = 0;
+
+      for await (const entry of versions) {
+        const versionId = entry.key[2] as number;
+        if (versionId > maxVersionId) {
+          maxVersionId = versionId;
+        }
+      }
+
+      return maxVersionId + 1;
+    } catch (error) {
+      console.error(`Failed to get next version ID for block ${blockId}:`, error);
+      return 1;
+    }
+  }
+
+  // Get version history for a block
+  async getContentBlockVersions(blockId: string): Promise<ContentBlockVersion[]> {
+    if (!this.kv) {
+      console.warn('KV not available, cannot get versions');
+      return [];
+    }
+
+    try {
+      const versions: ContentBlockVersion[] = [];
+      const entries = this.kv.list({ prefix: ['versions', blockId] });
+
+      for await (const entry of entries) {
+        let version: ContentBlockVersion;
+
+        if (entry.value.compressed) {
+          // Decompress version data
+          const decompressedData = await decompressText(entry.value.data);
+          version = JSON.parse(decompressedData);
+        } else {
+          version = entry.value;
+        }
+
+        versions.push(version);
+      }
+
+      // Sort by version ID (newest first)
+      versions.sort((a, b) => b.versionId - a.versionId);
+
+      console.log(`📚 Retrieved ${versions.length} versions for block ${blockId}`);
+      return versions;
+    } catch (error) {
+      console.error(`Failed to get versions for block ${blockId}:`, error);
+      return [];
+    }
+  }
+
+  // Undo to a specific version
+  async undoContentBlock(blockId: string, targetVersionId?: number): Promise<ExecutionResult | null> {
+    if (!this.kv) {
+      console.warn('KV not available, cannot undo');
+      return null;
+    }
+
+    try {
+      const versions = await this.getContentBlockVersions(blockId);
+      if (versions.length === 0) {
+        console.warn(`No versions found for block ${blockId}`);
+        return null;
+      }
+
+      console.log(`🔄 Undo requested for block ${blockId} - Available versions: ${versions.length}`);
+
+      let targetVersion: ContentBlockVersion | undefined;
+
+      if (targetVersionId) {
+        // Specific version requested
+        targetVersion = versions.find(v => v.versionId === targetVersionId);
+        if (!targetVersion) {
+          console.warn(`Target version ${targetVersionId} not found for block ${blockId}`);
+          return null;
+        }
+      } else {
+        // No specific version - undo to previous version
+        if (versions.length < 2) {
+          console.warn(`Cannot undo block ${blockId} - only ${versions.length} version(s) available`);
+          return null;
+        }
+        targetVersion = versions[1]; // Second most recent version
+      }
+
+      console.log(`↶ Undoing block ${blockId} to version ${targetVersion.versionId}`);
+
+      // Execute the target version's code
+      const result = await this.executeContentBlock(blockId, targetVersion.code);
+
+      // Store the undone version ID for potential redo
+      const undoneVersionId = versions[0].versionId;
+
+      // Create a new version for the undo operation
+      await this.createVersion(blockId, targetVersion.code, 'undo', {
+        description: `Undid to version ${targetVersion.versionId}`,
+        author: 'system',
+        previousVersionId: undoneVersionId,
+        undoneVersionId: undoneVersionId
+      });
+
+      // Store redo information
+      await this.storeRedoInfo(blockId, undoneVersionId);
+
+      console.log(`✅ Successfully undid block ${blockId} to version ${targetVersion.versionId}`);
+      return result;
+    } catch (error) {
+      console.error(`Failed to undo block ${blockId}:`, error);
+      return null;
+    }
+  }
+
+  // Redo the last undone action
+  async redoContentBlock(blockId: string): Promise<ExecutionResult | null> {
+    if (!this.kv) {
+      console.warn('KV not available, cannot redo');
+      return null;
+    }
+
+    try {
+      // Get the redo information
+      const redoInfo = await this.getRedoInfo(blockId);
+      if (!redoInfo) {
+        console.warn(`No redo information found for block ${blockId}`);
+        return null;
+      }
+
+      const { undoneVersionId } = redoInfo;
+
+      // Get all versions to find the undone version
+      const versions = await this.getContentBlockVersions(blockId);
+      const undoneVersion = versions.find(v => v.versionId === undoneVersionId);
+
+      if (!undoneVersion) {
+        console.warn(`Undone version ${undoneVersionId} not found for block ${blockId}`);
+        return null;
+      }
+
+      console.log(`↷ Redoing block ${blockId} to version ${undoneVersion.versionId}`);
+
+      // Execute the undone version's code
+      const result = await this.executeContentBlock(blockId, undoneVersion.code);
+
+      // Create a new version for the redo operation
+      await this.createVersion(blockId, undoneVersion.code, 'redo', {
+        description: `Redid to version ${undoneVersion.versionId}`,
+        author: 'system',
+        previousVersionId: versions[0].versionId
+      });
+
+      // Clear redo information
+      await this.clearRedoInfo(blockId);
+
+      console.log(`✅ Successfully redid block ${blockId} to version ${undoneVersion.versionId}`);
+      return result;
+    } catch (error) {
+      console.error(`Failed to redo block ${blockId}:`, error);
+      return null;
+    }
+  }
+
+  // Store redo information
+  private async storeRedoInfo(blockId: string, undoneVersionId: number): Promise<void> {
+    if (!this.kv) return;
+
+    try {
+      await this.kv.set(['redo-info', blockId], {
+        undoneVersionId,
+        timestamp: Date.now()
+      });
+      console.log(`💾 Stored redo info for block ${blockId}: undone version ${undoneVersionId}`);
+    } catch (error) {
+      console.error(`Failed to store redo info for block ${blockId}:`, error);
+    }
+  }
+
+  // Get redo information
+  private async getRedoInfo(blockId: string): Promise<{ undoneVersionId: number; timestamp: number } | null> {
+    if (!this.kv) return null;
+
+    try {
+      const entry = await this.kv.get(['redo-info', blockId]);
+      return entry.value;
+    } catch (error) {
+      console.error(`Failed to get redo info for block ${blockId}:`, error);
+      return null;
+    }
+  }
+
+  // Clear redo information
+  private async clearRedoInfo(blockId: string): Promise<void> {
+    if (!this.kv) return;
+
+    try {
+      await this.kv.delete(['redo-info', blockId]);
+      console.log(`🗑️ Cleared redo info for block ${blockId}`);
+    } catch (error) {
+      console.error(`Failed to clear redo info for block ${blockId}:`, error);
+    }
+  }
+
+  // Check if redo is available for a block
+  async canRedo(blockId: string): Promise<boolean> {
+    const redoInfo = await this.getRedoInfo(blockId);
+    return !!redoInfo;
+  }
+
+  // Get the current version ID for a block
+  async getCurrentVersionId(blockId: string): Promise<number> {
+    const versions = await this.getContentBlockVersions(blockId);
+    return versions.length > 0 ? versions[0].versionId : 0;
+  }
+
+  // Clean up old versions (keep only the last N versions)
+  async cleanupOldVersions(blockId: string, keepVersions: number = 10): Promise<number> {
+    if (!this.kv) {
+      console.warn('KV not available, cannot cleanup versions');
+      return 0;
+    }
+
+    try {
+      const versions = await this.getContentBlockVersions(blockId);
+      if (versions.length <= keepVersions) {
+        return 0; // No cleanup needed
+      }
+
+      const versionsToDelete = versions.slice(keepVersions);
+      let deletedCount = 0;
+
+      for (const version of versionsToDelete) {
+        await this.kv.delete(['versions', blockId, version.versionId]);
+        deletedCount++;
+      }
+
+      console.log(`🧹 Cleaned up ${deletedCount} old versions for block ${blockId}`);
+      return deletedCount;
+    } catch (error) {
+      console.error(`Failed to cleanup versions for block ${blockId}:`, error);
+      return 0;
+    }
+  }
+
+  // Enhanced executeContentBlock with version tracking
+  async executeContentBlockWithVersion(
+    blockId: string,
+    code: ContentBlockCode,
+    changeType: ContentBlockVersion['changeType'] = 'execution',
+    metadata: Partial<ContentBlockVersion['metadata']> = {}
+  ): Promise<ExecutionResult> {
+    const result = await this.executeContentBlock(blockId, code);
+
+    // Create versions for all successful content block executions
+    if (result.success && (changeType === 'user_edit' || changeType === 'ai_generated' || changeType === 'ai_modified' || changeType === 'execution' || changeType === 'undo' || changeType === 'redo')) {
+      await this.createVersion(blockId, code, changeType, {
+        ...metadata,
+        executionResult: result
+      });
+
+      // Cleanup old versions (keep last 10)
+      await this.cleanupOldVersions(blockId, 10);
+    }
+
+    return result;
+  }
+
+  // Simple updateContentBlock with version tracking
+  async updateContentBlockWithVersion(
+    blockId: string,
+    updates: Partial<ContentBlockCode>,
+    changeType: ContentBlockVersion['changeType'] = 'user_edit',
+    metadata: Partial<ContentBlockVersion['metadata']> = {}
+  ): Promise<ExecutionResult> {
+    console.log(`🔄 Updating content block ${blockId} with changeType: ${changeType}`);
+    console.log(`📊 KV available: ${!!this.kv}`);
+
+    // Execute the update
+    const result = await this.updateContentBlock(blockId, updates);
+
+    // Create a version for every user edit (simple and reliable)
+    if (changeType === 'user_edit') {
+      console.log(`📝 Attempting to create version for ${blockId} (user_edit)`);
+
+      const versionCode: ContentBlockCode = {
+        html: updates.html || '',
+        css: updates.css || '',
+        javascript: updates.javascript || ''
+      };
+
+      console.log(`� Version code for ${blockId}:`, {
+        htmlLength: versionCode.html.length,
+        cssLength: versionCode.css.length,
+        jsLength: versionCode.javascript.length
+      });
+
+      const versionId = await this.createVersion(blockId, versionCode, changeType, {
+        ...metadata,
+        executionResult: result,
+        description: `Content block updated by ${metadata.author || 'user'}`
+      });
+
+      if (versionId > 0) {
+        console.log(`✅ Version ${versionId} created for ${blockId}`);
+      } else {
+        console.error(`❌ Failed to create version for ${blockId}`);
+      }
+
+      // Clean up old versions (keep last 10)
+      await this.cleanupOldVersions(blockId, 10);
+    } else {
+      console.log(`⚠️ Skipping version creation for ${blockId} - changeType is ${changeType}, not user_edit`);
+    }
+
+    return result;
   }
 }

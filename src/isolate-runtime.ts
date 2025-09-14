@@ -68,12 +68,30 @@ export interface VirtualWindow {
   };
   setTimeout: (callback: Function, delay: number) => number;
   setInterval: (callback: Function, delay: number) => number;
+  // Storage APIs
+  localStorage: IsolateStorage;
+  sessionStorage: IsolateStorage;
+  // Enhanced DOM methods
+  querySelector: (selector: string) => VirtualDOMElement | null;
+  querySelectorAll: (selector: string) => VirtualDOMElement[];
+  getElementsByClassName: (className: string) => VirtualDOMElement[];
+  getElementsByTagName: (tagName: string) => VirtualDOMElement[];
+  getElementById: (id: string) => VirtualDOMElement | null;
 }
 
 export interface DemoAPI {
   getData: (key: string) => Promise<any>;
   updateDisplay: (html: string) => void;
   logEvent: (eventType: string, data: any) => void;
+}
+
+export interface IsolateStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+  clear(): void;
+  key(index: number): string | null;
+  readonly length: number;
 }
 
 export interface IsolateRuntime {

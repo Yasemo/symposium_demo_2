@@ -230,7 +230,8 @@ export class ContentBlockIsolate {
 
       const handleResponse = (event: MessageEvent) => {
         const result = event.data;
-        if (result.type === 'update_result') {
+        // Accept both 'update_result' and 'execution_result' since updates reuse execution logic
+        if (result.type === 'update_result' || result.type === 'execution_result') {
           clearTimeout(timeoutId);
           this.worker.removeEventListener('message', handleResponse);
           resolve(result);
@@ -369,26 +370,24 @@ export class SymposiumIsolateManager implements IsolateManager {
       console.warn('Unable to get memory usage in isolate manager:', error);
     }
 
-    // Log per-isolate memory usage if there are active isolates
+    // Log isolate count and total app memory
     if (this.resourceStats.activeIsolates > 0) {
-      // Generate individual memory usage for each isolate (with realistic variation)
-      const isolateMemoryUsages = this.generateIsolateMemoryUsages();
+      // Get detailed system memory breakdown
+      const systemMemory = Deno.memoryUsage();
+      const heapUsed = (systemMemory.heapUsed / (1024 * 1024)).toFixed(1);
+      const rss = (systemMemory.rss / (1024 * 1024)).toFixed(1);
+      const external = (systemMemory.external / (1024 * 1024)).toFixed(1);
+      const heapTotal = (systemMemory.heapTotal / (1024 * 1024)).toFixed(1);
 
-      // Calculate average for summary
-      const totalIsolateMemory = isolateMemoryUsages.reduce((sum, usage) => sum + usage.memory, 0);
-      const averageMemory = (totalIsolateMemory / this.resourceStats.activeIsolates).toFixed(1);
+      console.log(`⚡ Isolates: ${this.resourceStats.activeIsolates} active`);
+      console.log(`📊 Memory: Total App ${this.resourceStats.totalMemoryUsed.toFixed(1)}MB (Heap: ${heapUsed}MB used/${heapTotal}MB total, RSS: ${rss}MB, External: ${external}MB)`);
 
-      console.log(`⚡ Isolates: ${this.resourceStats.activeIsolates} active (${averageMemory}MB avg), Total: ${this.resourceStats.totalMemoryUsed.toFixed(1)}MB`);
-
-      // List individual isolates with their unique memory usage
+      // List individual isolates (without misleading memory numbers)
       if (this.resourceStats.activeIsolates <= 10) { // Show details for reasonable numbers
-        let index = 0;
         for (const [blockId, isolate] of this.isolates.entries()) {
           const timeSinceActivity = Date.now() - isolate.getLastActivity();
           const minutes = Math.floor(timeSinceActivity / 60000);
-          const memoryUsage = isolateMemoryUsages[index] || { memory: 0, status: 'unknown' };
-          console.log(`   └─ ${blockId}: 🟢 active (${memoryUsage.memory.toFixed(1)}MB), ${minutes}m ago`);
-          index++;
+          console.log(`   └─ ${blockId}: 🟢 active, ${minutes}m ago`);
         }
       }
     }
@@ -444,6 +443,56 @@ export class SymposiumIsolateManager implements IsolateManager {
       systemMemory: Deno.memoryUsage ? Deno.memoryUsage() : null,
       timestamp: Date.now()
     };
+  }
+
+  private async updateIsolateMemoryStats(): Promise<Array<{memory: number, status: string}>> {
+    const memoryPromises = Array.from(this.isolates.values()).map(async (isolate) => {
+      try {
+        // Request memory stats from the isolate
+        const stats = await this.requestIsolateMemoryStats(isolate);
+        return {
+          memory: stats.averageMemoryUsage || 0,
+          status: 'active'
+        };
+      } catch (error) {
+        console.warn(`Failed to get memory stats for isolate ${isolate.getBlockId()}:`, error);
+        return {
+          memory: 0,
+          status: 'error'
+        };
+      }
+    });
+
+    return await Promise.all(memoryPromises);
+  }
+
+  private async requestIsolateMemoryStats(isolate: ContentBlockIsolate): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error('Memory stats request timeout'));
+      }, 5000); // 5 second timeout
+
+      // Create a unique request ID
+      const requestId = `mem_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const handleResponse = (event: MessageEvent) => {
+        const message = event.data;
+        if (message.type === 'memory_stats_response' && message.requestId === requestId) {
+          clearTimeout(timeoutId);
+          isolate.worker.removeEventListener('message', handleResponse);
+          resolve(message.stats);
+        }
+      };
+
+      isolate.worker.addEventListener('message', handleResponse);
+
+      // Send memory stats request to isolate
+      isolate.worker.postMessage({
+        type: 'get_memory_stats',
+        requestId,
+        timestamp: Date.now()
+      });
+    });
   }
 
   getIsolateResourceSummary(isolateId: string) {
