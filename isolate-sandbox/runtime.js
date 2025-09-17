@@ -1,7 +1,13 @@
 // Isolate Runtime Environment for Symposium Demo
 // This code runs inside Deno Web Workers to execute user-generated content safely
 
-import { DOMParser } from "deno-dom";
+// Define global sendToMain function before importing proxy API
+globalThis.sendToMain = function(message) {
+  self.postMessage(message);
+};
+
+// Import the proxy API to provide enhanced capabilities
+import "./proxy-api.js";
 
 // Resource monitoring utilities for isolates
 class ResourceMonitor {
@@ -239,16 +245,16 @@ class IsolateStorage {
 
       self.addEventListener('message', handleResponse);
 
-      // Use the runtime's sendToMain method
-      if (typeof runtime !== 'undefined' && runtime.sendToMain) {
-        runtime.sendToMain({
+      // Use the global sendToMain function
+      if (typeof globalThis.sendToMain === 'function') {
+        globalThis.sendToMain({
           type: 'apiCall',
           method,
           params,
           callId
         });
       } else {
-        // Fallback if runtime not available
+        // Fallback if global sendToMain not available
         self.postMessage({
           type: 'apiCall',
           method,
@@ -429,55 +435,127 @@ class IsolateRuntime {
       // Clear previous logs
       this.logs = [];
 
-      console.log(`📝 Executing content block - HTML: ${(code.html || '').length} chars, CSS: ${(code.css || '').length} chars, JS: ${(code.javascript || '').length} chars`);
+      console.log(`📝 Executing unified HTML content block - ${(code.html || '').length} chars`);
 
       // Record initial memory usage
       this.resourceMonitor.recordMemoryUsage();
 
-      let htmlContent;
-      let extractedCss = code.css || '';
-      let extractedJs = code.javascript || '';
+      // Wait for proxy API to be ready
+      await this.waitForAPIReady();
 
-      // Check if HTML is a complete document or just HTML content
-      if (code.html && code.html.trim().startsWith('<!DOCTYPE html>')) {
-        // It's a complete HTML document - use it as-is
-        htmlContent = code.html;
-        console.log('Using complete HTML document');
-      } else {
-        // Legacy format - construct HTML document from parts
-        htmlContent = code.html || '<html><body></body></html>';
-        console.log('Constructing HTML document from parts');
+      // Defensive check: Ensure proxy API is ready
+      if (!globalThis.symposium) {
+        throw new Error('Proxy API not initialized - symposium object not found');
       }
 
-      // Create deno-dom instance with real browser APIs
-      const document = new DOMParser().parseFromString(htmlContent, "text/html");
+      if (!globalThis.symposium.dom) {
+        throw new Error('DOM API not available - symposium.dom not found');
+      }
 
-      // Set up global browser APIs using real deno-dom implementations
-      globalThis.document = document;
+      if (typeof globalThis.symposium.dom.execute !== 'function') {
+        throw new Error('DOM execute method not available');
+      }
 
-      // Create minimal window object with essential properties
+      // Validate that we have a complete HTML document
+      if (!code.html || !code.html.trim().startsWith('<!DOCTYPE html>')) {
+        throw new Error('Content blocks must be complete HTML documents starting with <!DOCTYPE html>');
+      }
+
+      // Use the orchestrator's DOM handler for unified HTML document execution
+      const result = await globalThis.symposium.dom.execute(
+        code.html,
+        code.css || '', // Optional additional CSS
+        code.javascript || '' // Optional additional JavaScript
+      );
+
+      // Set up minimal global APIs for compatibility
+      this.setupMinimalGlobals();
+
+      console.log('Unified HTML content block executed successfully via orchestrator');
+
+      return {
+        type: 'execution_result',
+        success: result.success,
+        html: result.html || '',
+        css: result.css || '',
+        javascript: result.javascript || '',
+        logs: result.logs || [],
+        error: result.error,
+        timestamp: Date.now()
+      };
+
+    } catch (error) {
+      console.error('Content execution error:', error);
+
+      // Provide more detailed error information
+      const errorDetails = {
+        message: error.message,
+        stack: error.stack,
+        hasSymposium: !!globalThis.symposium,
+        hasDomAPI: !!(globalThis.symposium && globalThis.symposium.dom),
+        hasExecuteMethod: !!(globalThis.symposium && globalThis.symposium.dom && typeof globalThis.symposium.dom.execute === 'function'),
+        isUnifiedHTML: code.html && code.html.trim().startsWith('<!DOCTYPE html>')
+      };
+
+      console.error('API availability check:', errorDetails);
+
+      return {
+        type: 'execution_result',
+        success: false,
+        error: error.message,
+        details: errorDetails,
+        stack: error.stack,
+        logs: this.logs,
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  // Wait for the proxy API to be ready
+  async waitForAPIReady() {
+    if (!globalThis.symposium) {
+      console.log('[IsolateRuntime] Waiting for proxy API to initialize...');
+
+      // Wait for symposium to be available
+      let attempts = 0;
+      while (!globalThis.symposium && attempts < 50) { // 5 seconds max
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+
+      if (!globalThis.symposium) {
+        throw new Error('Proxy API failed to initialize within timeout');
+      }
+    }
+
+    // Wait for the API to be marked as ready
+    if (globalThis.symposium.ready && typeof globalThis.symposium.ready === 'function') {
+      await globalThis.symposium.ready();
+    }
+
+    console.log('[IsolateRuntime] Proxy API is ready');
+  }
+
+  // Set up minimal global APIs for backward compatibility
+  setupMinimalGlobals() {
+    // Set up basic window and document objects for scripts that expect them
+    if (!globalThis.window) {
       globalThis.window = {
-        document: document,
-        navigator: { userAgent: "Deno Isolate" },
-        location: { href: "http://localhost", hostname: "localhost" },
-        // Storage APIs
-        localStorage: this.localStorage,
-        sessionStorage: this.sessionStorage,
         console: {
           log: (...args) => {
             const message = args.join(' ');
-            runtime.logs.push(`LOG: ${message}`);
-            runtime.sendToMain({ type: 'log', args });
+            this.logs.push(`LOG: ${message}`);
+            console.log(`[Isolate] ${message}`);
           },
           error: (...args) => {
             const message = args.join(' ');
-            runtime.logs.push(`ERROR: ${message}`);
-            runtime.sendToMain({ type: 'error', args });
+            this.logs.push(`ERROR: ${message}`);
+            console.error(`[Isolate] ${message}`);
           },
           warn: (...args) => {
             const message = args.join(' ');
-            runtime.logs.push(`WARN: ${message}`);
-            runtime.sendToMain({ type: 'warn', args });
+            this.logs.push(`WARN: ${message}`);
+            console.warn(`[Isolate] ${message}`);
           }
         },
         setTimeout: (callback, delay) => {
@@ -487,107 +565,16 @@ class IsolateRuntime {
         setInterval: (callback, delay) => {
           if (delay < 100) delay = 100;
           return setInterval(callback, delay);
-        },
-        // Enhanced DOM methods
-        querySelector: (selector) => {
-          try {
-            return document.querySelector(selector);
-          } catch (error) {
-            console.warn('querySelector error:', error);
-            return null;
-          }
-        },
-        querySelectorAll: (selector) => {
-          try {
-            return Array.from(document.querySelectorAll(selector));
-          } catch (error) {
-            console.warn('querySelectorAll error:', error);
-            return [];
-          }
-        },
-        getElementsByClassName: (className) => {
-          try {
-            return Array.from(document.getElementsByClassName(className));
-          } catch (error) {
-            console.warn('getElementsByClassName error:', error);
-            return [];
-          }
-        },
-        getElementsByTagName: (tagName) => {
-          try {
-            return Array.from(document.getElementsByTagName(tagName));
-          } catch (error) {
-            console.warn('getElementsByTagName error:', error);
-            return [];
-          }
-        },
-        getElementById: (id) => {
-          try {
-            return document.getElementById(id);
-          } catch (error) {
-            console.warn('getElementById error:', error);
-            return null;
-          }
         }
-      };
-
-      globalThis.navigator = globalThis.window.navigator;
-      // Don't override globalThis.location - worker already has it
-
-      // Expose storage APIs globally
-      globalThis.localStorage = this.localStorage;
-      globalThis.sessionStorage = this.sessionStorage;
-
-      // Add our controlled API access
-      globalThis.demoAPI = this.apiAccess.demoAPI;
-
-      // Override fetch to validate URLs (using global fetch)
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = async (url, options) => {
-        if (!this.isAllowedUrl(url)) {
-          throw new Error(`Fetch blocked: ${url}`);
-        }
-        console.log(`Fetching: ${url}`);
-        return await originalFetch(url, options);
-      };
-
-      // For complete HTML documents, extract and execute embedded scripts
-      if (code.html && code.html.trim().startsWith('<!DOCTYPE html>')) {
-        // Extract and execute scripts from the HTML document
-        await this.executeEmbeddedScripts(document);
-      } else {
-        // Legacy behavior - inject CSS and execute separate JS
-        if (extractedCss) {
-          this.injectCSS(extractedCss);
-        }
-
-        if (extractedJs) {
-          await this.executeJavaScript(extractedJs);
-        }
-      }
-
-      // Return execution results
-      return {
-        type: 'execution_result',
-        success: true,
-        html: globalThis.document.body?.innerHTML || '',
-        css: extractedCss,
-        javascript: extractedJs,
-        logs: this.logs,
-        timestamp: Date.now()
-      };
-
-    } catch (error) {
-      console.error('Content execution error:', error);
-      return {
-        type: 'execution_result',
-        success: false,
-        error: error.message,
-        stack: error.stack,
-        logs: this.logs,
-        timestamp: Date.now()
       };
     }
+
+    // Expose storage APIs globally
+    globalThis.localStorage = this.localStorage;
+    globalThis.sessionStorage = this.sessionStorage;
+
+    // Add our controlled API access
+    globalThis.demoAPI = this.apiAccess.demoAPI;
   }
 
   async updateContentBlock(updates) {
@@ -817,12 +804,23 @@ class IsolateRuntime {
 
       self.addEventListener('message', handleResponse);
 
-      this.sendToMain({
-        type: 'apiCall',
-        method,
-        params,
-        callId
-      });
+      // Use the global sendToMain function
+      if (typeof globalThis.sendToMain === 'function') {
+        globalThis.sendToMain({
+          type: 'apiCall',
+          method,
+          params,
+          callId
+        });
+      } else {
+        // Fallback if global sendToMain not available
+        self.postMessage({
+          type: 'apiCall',
+          method,
+          params,
+          callId
+        });
+      }
 
       // Timeout after 10 seconds
       setTimeout(() => {

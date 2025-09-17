@@ -126,6 +126,12 @@ class SymposiumDemo {
             case 'model_changed':
                 this.handleModelChanged(message);
                 break;
+            case 'permission_changed':
+                this.handlePermissionChanged(message);
+                break;
+            case 'block_permission_changed':
+                this.handleBlockPermissionChanged(message);
+                break;
             case 'chat_history':
                 this.handleChatHistory(message);
                 break;
@@ -223,6 +229,9 @@ class SymposiumDemo {
 
         // Model selector functionality
         this.setupModelSelector();
+
+        // Permission selector functionality (removed global selector)
+        // Block-specific permissions are now handled per-block
     }
 
     // Model selector functionality
@@ -494,6 +503,198 @@ class SymposiumDemo {
             this.currentModel = model;
         } else {
             console.error('Failed to change model:', message.error);
+        }
+    }
+
+    handlePermissionChanged(message) {
+        const { permission, success } = message;
+        if (success) {
+            console.log(`Permission level changed to: ${permission}`);
+            this.currentPermission = permission;
+            this.updatePermissionDisplay();
+        } else {
+            console.error('Failed to change permission level:', message.error);
+        }
+    }
+
+    handleBlockPermissionChanged(message) {
+        const { blockId, permission, success } = message;
+        if (success) {
+            console.log(`Block ${blockId} permission changed to: ${permission}`);
+            // Update the permission selector UI
+            const permissionSelect = document.getElementById(`permission-${blockId}`);
+            if (permissionSelect) {
+                permissionSelect.value = permission;
+            }
+        } else {
+            console.error(`Failed to change permission for block ${blockId}:`, message.error);
+        }
+    }
+
+    changeBlockPermission(blockId, permission) {
+        if (!this.isConnected) {
+            this.showError('Not connected to server');
+            return;
+        }
+
+        console.log(`Changing permission for block ${blockId} to: ${permission}`);
+
+        // Send permission change request to server
+        this.ws.send(JSON.stringify({
+            type: 'change_block_permission',
+            blockId: blockId,
+            permission: permission
+        }));
+    }
+
+    // Permission selector functionality
+    setupPermissionSelector() {
+        this.availablePermissions = [
+            {
+                id: 'basic',
+                name: 'Basic',
+                description: 'Read-only operations, limited network access'
+            },
+            {
+                id: 'interactive',
+                name: 'Interactive',
+                description: 'File operations, enhanced network, canvas support'
+            },
+            {
+                id: 'data',
+                name: 'Data',
+                description: 'All interactive features + database access'
+            },
+            {
+                id: 'advanced',
+                name: 'Advanced',
+                description: 'Full system access for trusted content'
+            }
+        ];
+
+        this.isPermissionDropdownOpen = false;
+
+        const permissionSelectorBtn = document.getElementById('permission-selector-btn');
+        const permissionDropdown = document.getElementById('permission-dropdown');
+        const currentPermissionDisplay = document.getElementById('current-permission');
+
+        if (!permissionSelectorBtn || !permissionDropdown) return;
+
+        // Toggle dropdown
+        permissionSelectorBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.togglePermissionDropdown();
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!permissionSelectorBtn.contains(e.target) && !permissionDropdown.contains(e.target)) {
+                this.closePermissionDropdown();
+            }
+        });
+
+        // Initialize permission display
+        this.updatePermissionDisplay();
+
+        // Populate permission list
+        this.renderPermissionList();
+    }
+
+    togglePermissionDropdown() {
+        const permissionDropdown = document.getElementById('permission-dropdown');
+        const permissionSelectorBtn = document.getElementById('permission-selector-btn');
+
+        if (!permissionDropdown || !permissionSelectorBtn) return;
+
+        this.isPermissionDropdownOpen = !this.isPermissionDropdownOpen;
+
+        if (this.isPermissionDropdownOpen) {
+            permissionDropdown.classList.add('show');
+            permissionSelectorBtn.classList.add('active');
+        } else {
+            this.closePermissionDropdown();
+        }
+    }
+
+    closePermissionDropdown() {
+        const permissionDropdown = document.getElementById('permission-dropdown');
+        const permissionSelectorBtn = document.getElementById('permission-selector-btn');
+
+        if (permissionDropdown) {
+            permissionDropdown.classList.remove('show');
+        }
+        if (permissionSelectorBtn) {
+            permissionSelectorBtn.classList.remove('active');
+        }
+
+        this.isPermissionDropdownOpen = false;
+    }
+
+    renderPermissionList() {
+        const permissionList = document.getElementById('permission-list');
+        if (!permissionList) return;
+
+        permissionList.innerHTML = '';
+
+        this.availablePermissions.forEach(permission => {
+            const permissionItem = document.createElement('div');
+            permissionItem.className = 'permission-item';
+            permissionItem.dataset.permissionId = permission.id;
+
+            permissionItem.innerHTML = `
+                <div class="permission-name">${this.escapeHtml(permission.name)}</div>
+                <div class="permission-description">${this.escapeHtml(permission.description)}</div>
+            `;
+
+            permissionItem.addEventListener('click', () => {
+                this.selectPermission(permission);
+                this.closePermissionDropdown();
+            });
+
+            permissionList.appendChild(permissionItem);
+        });
+    }
+
+    selectPermission(permission) {
+        this.currentPermission = permission.id;
+        this.updatePermissionDisplay();
+
+        // Update selected state in dropdown
+        const permissionItems = document.querySelectorAll('.permission-item');
+        permissionItems.forEach(item => {
+            item.classList.toggle('selected', item.dataset.permissionId === permission.id);
+        });
+
+        // Save permission selection to localStorage for persistence
+        try {
+            localStorage.setItem('symposium_selected_permission', permission.id);
+            console.log(`Saved permission selection to localStorage: ${permission.id}`);
+        } catch (error) {
+            console.warn('Failed to save permission selection to localStorage:', error);
+        }
+
+        // Send permission change to server
+        if (this.isConnected) {
+            this.ws.send(JSON.stringify({
+                type: 'change_permission',
+                permission: permission.id
+            }));
+        }
+
+        console.log(`Selected permission: ${permission.id}`);
+    }
+
+    updatePermissionDisplay() {
+        const currentPermissionDisplay = document.getElementById('current-permission');
+        if (!currentPermissionDisplay) return;
+
+        const permission = this.availablePermissions.find(p => p.id === this.currentPermission);
+        if (permission) {
+            currentPermissionDisplay.textContent = permission.name;
+        } else {
+            // Fallback to default
+            currentPermissionDisplay.textContent = 'Interactive';
+            this.currentPermission = 'interactive';
         }
     }
 
@@ -933,17 +1134,27 @@ class SymposiumDemo {
         blockDiv.innerHTML = `
             <div class="content-block-header">
                 <h3>Content Block ${blockId.slice(0, 8)}</h3>
-                <div>
-                    <button onclick="app.showVersionHistory('${blockId}')" title="Version History">📚</button>
-                    <button onclick="app.undoBlock('${blockId}')" title="Undo">↶</button>
-                    <button onclick="app.redoBlock('${blockId}')" title="Redo" id="redo-btn-${blockId}" style="display: none;">↷</button>
-                    <button onclick="app.expandBlock('${blockId}')" title="Expand view">⛶</button>
-                    <button onclick="app.editBlock('${blockId}')">Edit</button>
-                    <button onclick="app.deleteBlock('${blockId}')" style="background: #dc3545;">Delete</button>
+                <div class="content-block-controls">
+                    <div class="permission-selector">
+                        <select id="permission-${blockId}" onchange="app.changeBlockPermission('${blockId}', this.value)">
+                            <option value="basic">Basic</option>
+                            <option value="interactive" selected>Interactive</option>
+                            <option value="data">Data</option>
+                            <option value="advanced">Advanced</option>
+                        </select>
+                    </div>
+                    <div class="content-block-buttons">
+                        <button onclick="app.showVersionHistory('${blockId}')" title="Version History">📚</button>
+                        <button onclick="app.undoBlock('${blockId}')" title="Undo">↶</button>
+                        <button onclick="app.redoBlock('${blockId}')" title="Redo" id="redo-btn-${blockId}" style="display: none;">↷</button>
+                        <button onclick="app.expandBlock('${blockId}')" title="Expand view">⛶</button>
+                        <button onclick="app.editBlock('${blockId}')">Edit</button>
+                        <button onclick="app.deleteBlock('${blockId}')" style="background: #dc3545;">Delete</button>
+                    </div>
                 </div>
             </div>
             <div class="content-block-output">
-                <iframe id="block-${blockId}" sandbox="allow-scripts">
+                <iframe id="block-${blockId}" sandbox="allow-scripts allow-modals allow-same-origin allow-forms allow-popups allow-downloads">
                 </iframe>
             </div>
         `;
@@ -966,7 +1177,7 @@ class SymposiumDemo {
             // It's a complete HTML document, inject the demoAPI script
             const htmlContent = result.html;
 
-            // Insert the demoAPI script before the closing </body> tag
+            // Insert the demoAPI and symposium scripts before the closing </body> tag
             const demoAPIScript = `
                 <script>
                     // Demo API for content blocks - communicates with parent window
@@ -1017,6 +1228,252 @@ class SymposiumDemo {
                             });
                         }
                     };
+
+                    // Complete Symposium API for content blocks - routes through orchestrator proxy
+                    window.symposium = {
+                        // File System Operations
+                        fileSystem: {
+                            async readFile(path, options = {}) {
+                                return await symposium._callCapability('file.read', {
+                                    path,
+                                    encoding: options.encoding || 'utf8',
+                                    maxSize: options.maxSize
+                                });
+                            },
+
+                            async writeFile(path, content, options = {}) {
+                                return await symposium._callCapability('file.write', {
+                                    path,
+                                    content,
+                                    encoding: options.encoding || 'utf8',
+                                    createDirectories: options.createDirectories || false
+                                });
+                            },
+
+                            async deleteFile(path) {
+                                return await symposium._callCapability('file.delete', { path });
+                            },
+
+                            async listFiles(path, options = {}) {
+                                return await symposium._callCapability('file.list', {
+                                    path: path || '.',
+                                    recursive: options.recursive || false,
+                                    pattern: options.pattern
+                                });
+                            },
+
+                            async listDirectory(path, options = {}) {
+                                return await symposium._callCapability('file.list', {
+                                    path,
+                                    recursive: options.recursive || false,
+                                    pattern: options.pattern
+                                });
+                            },
+
+                            async getFileInfo(path) {
+                                return await symposium._callCapability('file.info', { path });
+                            },
+
+                            async fileExists(path) {
+                                return await symposium._callCapability('file.exists', { path });
+                            },
+
+                            async getInfo() {
+                                return await symposium._callCapability('file.info', {});
+                            }
+                        },
+
+                        // Network Operations
+                        network: {
+                            async fetch(url, options = {}) {
+                                return await symposium._callCapability('network.request', {
+                                    url,
+                                    method: options.method || 'GET',
+                                    headers: options.headers || {},
+                                    body: options.body,
+                                    timeout: options.timeout || 10000
+                                });
+                            },
+
+                            async makeRequest(method, url, options = {}) {
+                                return await symposium._callCapability('network.request', {
+                                    url,
+                                    method: method || 'GET',
+                                    headers: options.headers || {},
+                                    body: options.body,
+                                    timeout: options.timeout || 10000
+                                });
+                            },
+
+                            async sendWebhook(url, payload) {
+                                return await symposium._callCapability('network.webhook', {
+                                    url,
+                                    payload,
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' }
+                                });
+                            },
+
+                            async getInfo() {
+                                return await symposium._callCapability('network.info', {});
+                            }
+                        },
+
+                        // Canvas/Graphics Operations
+                        canvas: {
+                            async createCanvas(width, height) {
+                                return await symposium._callCapability('canvas.create', {
+                                    width,
+                                    height,
+                                    contextType: '2d'
+                                });
+                            },
+
+                            async draw(canvasId, operations) {
+                                return await symposium._callCapability('canvas.draw', {
+                                    canvasId,
+                                    operations
+                                });
+                            },
+
+                            async exportImage(canvasId, format = 'png') {
+                                return await symposium._callCapability('canvas.export', {
+                                    canvasId,
+                                    format
+                                });
+                            },
+
+                            async getInfo() {
+                                return await symposium._callCapability('canvas.getInfo', {});
+                            }
+                        },
+
+                            // Database Operations
+                            database: {
+                                async query(sql, params = []) {
+                                    return await symposium._callCapability('database.query', { query: sql, params });
+                                },
+
+                                async transaction(queries) {
+                                    return await symposium._callCapability('database.transaction', { queries });
+                                },
+
+                                async getInfo() {
+                                    return await symposium._callCapability('database.getInfo', {});
+                                }
+                            },
+
+                            // Process Execution
+                            process: {
+                                async execute(command, args = [], options = {}) {
+                                    return await symposium._callCapability('process.execute', {
+                                        command,
+                                        args,
+                                        cwd: options.cwd,
+                                        env: options.env,
+                                        timeout: options.timeout || 30000
+                                    });
+                                }
+                            },
+
+                            // DOM Operations
+                            dom: {
+                                async parse(html) {
+                                    return await symposium._callCapability('dom.parse', { html });
+                                },
+
+                                async execute(html, css = '', javascript = '') {
+                                    return await symposium._callCapability('dom.execute', {
+                                        html,
+                                        css,
+                                        javascript
+                                    });
+                                },
+
+                                async update(updates) {
+                                    return await symposium._callCapability('dom.update', updates);
+                                },
+
+                                async injectCss(css, html = '') {
+                                    return await symposium._callCapability('dom.inject_css', {
+                                        css,
+                                        html
+                                    });
+                                },
+
+                                async injectJs(javascript, html = '') {
+                                    return await symposium._callCapability('dom.inject_js', {
+                                        javascript,
+                                        html
+                                    });
+                                }
+                            },
+
+                        // Utility functions
+                        utils: {
+                            generateTempPath(extension = '') {
+                                const timestamp = Date.now();
+                                const random = Math.random().toString(36).substr(2, 9);
+                                return \`temp/tmp_\${timestamp}_\${random}\${extension ? '.' + extension : ''}\`;
+                            },
+
+                            getTimestamp() {
+                                return Date.now();
+                            },
+
+                            generateId() {
+                                return crypto.randomUUID();
+                            }
+                        },
+
+                        // Internal method to communicate with main thread
+                        _callCapability: async function(operation, payload) {
+                            return new Promise((resolve, reject) => {
+                                const callId = Date.now() + Math.random();
+
+                                const handleMessage = (event) => {
+                                    if (event.data.type === 'apiResponse' && event.data.callId === callId) {
+                                        window.removeEventListener('message', handleMessage);
+                                        if (event.data.error) {
+                                            reject(new Error(event.data.error));
+                                        } else {
+                                            resolve(event.data.result);
+                                        }
+                                    }
+                                };
+
+                                window.addEventListener('message', handleMessage);
+
+                                // Send capability request to parent window
+                                window.parent.postMessage({
+                                    type: 'apiCall',
+                                    blockId: '${blockId}',
+                                    method: operation,
+                                    params: payload,
+                                    callId
+                                }, '*');
+
+                                // Timeout based on operation type
+                                const timeout = operation.startsWith('database.') ? 30000 :
+                                               operation.startsWith('network.') ? 15000 : 10000;
+
+                                setTimeout(() => {
+                                    window.removeEventListener('message', handleMessage);
+                                    reject(new Error(\`\${operation} timeout\`));
+                                }, timeout);
+                            });
+                        }
+                    };
+
+                    // Convenience aliases
+                    window.symposium.fs = window.symposium.fileSystem;
+                    window.symposium.db = window.symposium.database;
+                    window.symposium.net = window.symposium.network;
+                    window.symposium.proc = window.symposium.process;
+
+                    // Legacy compatibility aliases
+                    window.symposium.readFile = window.symposium.fileSystem.readFile.bind(window.symposium.fileSystem);
+                    window.symposium.writeFile = window.symposium.fileSystem.writeFile.bind(window.symposium.fileSystem);
                 </script>
             `;
 
@@ -1064,34 +1521,262 @@ class SymposiumDemo {
                                             window.removeEventListener('message', handleMessage);
                                             if (event.data.error) {
                                                 reject(new Error(event.data.error));
-                                                } else {
-                                                    resolve(event.data.result);
-                                                }
+                                            } else {
+                                                resolve(event.data.result);
                                             }
-                                        };
+                                        }
+                                    };
 
-                                        window.addEventListener('message', handleMessage);
+                                    window.addEventListener('message', handleMessage);
 
-                                        // Send API call to parent window
-                                        window.parent.postMessage({
-                                            type: 'apiCall',
-                                            blockId: '${blockId}',
-                                            method,
-                                            params,
-                                            callId
-                                        }, '*');
+                                    // Send API call to parent window
+                                    window.parent.postMessage({
+                                        type: 'apiCall',
+                                        blockId: '${blockId}',
+                                        method,
+                                        params,
+                                        callId
+                                    }, '*');
 
-                                        // Timeout after 10 seconds
-                                        setTimeout(() => {
-                                            window.removeEventListener('message', handleMessage);
-                                            reject(new Error('API call timeout'));
-                                        }, 10000);
+                                    // Timeout after 10 seconds
+                                    setTimeout(() => {
+                                        window.removeEventListener('message', handleMessage);
+                                        reject(new Error('API call timeout'));
+                                    }, 10000);
+                                });
+                            }
+                        };
+
+                        // Complete Symposium API for content blocks - routes through orchestrator proxy
+                        window.symposium = {
+                            // File System Operations
+                            fileSystem: {
+                                async readFile(path, options = {}) {
+                                    return await this._callCapability('file.read', {
+                                        path,
+                                        encoding: options.encoding || 'utf8',
+                                        maxSize: options.maxSize
+                                    });
+                                },
+
+                                async writeFile(path, content, options = {}) {
+                                    return await this._callCapability('file.write', {
+                                        path,
+                                        content,
+                                        encoding: options.encoding || 'utf8',
+                                        createDirectories: options.createDirectories || false
+                                    });
+                                },
+
+                                async deleteFile(path) {
+                                    return await this._callCapability('file.delete', { path });
+                                },
+
+                                async listDirectory(path, options = {}) {
+                                    return await this._callCapability('file.list', {
+                                        path,
+                                        recursive: options.recursive || false,
+                                        pattern: options.pattern
+                                    });
+                                },
+
+                                async getFileInfo(path) {
+                                    return await this._callCapability('file.info', { path });
+                                },
+
+                                async fileExists(path) {
+                                    return await this._callCapability('file.exists', { path });
+                                },
+
+                                async getInfo() {
+                                    return await this._callCapability('file.info', {});
+                                }
+                            },
+
+                            // Network Operations
+                            network: {
+                                async fetch(url, options = {}) {
+                                    return await this._callCapability('network.request', {
+                                        url,
+                                        method: options.method || 'GET',
+                                        headers: options.headers || {},
+                                        body: options.body,
+                                        timeout: options.timeout || 10000
+                                    });
+                                },
+
+                                async sendWebhook(url, payload) {
+                                    return await this._callCapability('network.webhook', {
+                                        url,
+                                        payload,
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' }
+                                    });
+                                },
+
+                                async getInfo() {
+                                    return await this._callCapability('network.info', {});
+                                }
+                            },
+
+                        // Canvas/Graphics Operations
+                        canvas: {
+                            async createCanvas(width, height) {
+                                return await symposium._callCapability('canvas.create', {
+                                    width,
+                                    height,
+                                    contextType: '2d'
+                                });
+                            },
+
+                            async draw(canvasId, operations) {
+                                return await symposium._callCapability('canvas.draw', {
+                                    canvasId,
+                                    operations
+                                });
+                            },
+
+                            async exportImage(canvasId, format = 'png') {
+                                return await symposium._callCapability('canvas.export', {
+                                    canvasId,
+                                    format
+                                });
+                            },
+
+                            async getInfo() {
+                                return await symposium._callCapability('canvas.getInfo', {});
+                            }
+                        },
+
+                            // Database Operations
+                            database: {
+                                async query(sql, params = []) {
+                                    return await symposium._callCapability('database.query', { query: sql, params });
+                                },
+
+                                async transaction(queries) {
+                                    return await symposium._callCapability('database.transaction', { queries });
+                                },
+
+                                async getInfo() {
+                                    return await symposium._callCapability('database.getInfo', {});
+                                }
+                            },
+
+                            // Process Execution
+                            process: {
+                                async execute(command, args = [], options = {}) {
+                                    return await symposium._callCapability('process.execute', {
+                                        command,
+                                        args,
+                                        cwd: options.cwd,
+                                        env: options.env,
+                                        timeout: options.timeout || 30000
                                     });
                                 }
-                            };
+                            },
 
-                            ${result.javascript || ''}
-                        </script>
+                            // DOM Operations
+                            dom: {
+                                async parse(html) {
+                                    return await symposium._callCapability('dom.parse', { html });
+                                },
+
+                                async execute(html, css = '', javascript = '') {
+                                    return await symposium._callCapability('dom.execute', {
+                                        html,
+                                        css,
+                                        javascript
+                                    });
+                                },
+
+                                async update(updates) {
+                                    return await symposium._callCapability('dom.update', updates);
+                                },
+
+                                async injectCss(css, html = '') {
+                                    return await symposium._callCapability('dom.inject_css', {
+                                        css,
+                                        html
+                                    });
+                                },
+
+                                async injectJs(javascript, html = '') {
+                                    return await symposium._callCapability('dom.inject_js', {
+                                        javascript,
+                                        html
+                                    });
+                                }
+                            },
+
+                            // Utility functions
+                            utils: {
+                                generateTempPath(extension = '') {
+                                    const timestamp = Date.now();
+                                    const random = Math.random().toString(36).substr(2, 9);
+                                    return \`temp/tmp_\${timestamp}_\${random}\${extension ? '.' + extension : ''}\`;
+                                },
+
+                                getTimestamp() {
+                                    return Date.now();
+                                },
+
+                                generateId() {
+                                    return crypto.randomUUID();
+                                }
+                            },
+
+                            // Internal method to communicate with main thread
+                            async _callCapability(operation, payload) {
+                                return new Promise((resolve, reject) => {
+                                    const callId = Date.now() + Math.random();
+
+                                    const handleMessage = (event) => {
+                                        if (event.data.type === 'apiResponse' && event.data.callId === callId) {
+                                            window.removeEventListener('message', handleMessage);
+                                            if (event.data.error) {
+                                                reject(new Error(event.data.error));
+                                            } else {
+                                                resolve(event.data.result);
+                                            }
+                                        }
+                                    };
+
+                                    window.addEventListener('message', handleMessage);
+
+                                    // Send capability request to parent window
+                                    window.parent.postMessage({
+                                        type: 'apiCall',
+                                        blockId: '${blockId}',
+                                        method: operation,
+                                        params: payload,
+                                        callId
+                                    }, '*');
+
+                                    // Timeout based on operation type
+                                    const timeout = operation.startsWith('database.') ? 30000 :
+                                                   operation.startsWith('network.') ? 15000 : 10000;
+
+                                    setTimeout(() => {
+                                        window.removeEventListener('message', handleMessage);
+                                        reject(new Error(\`\${operation} timeout\`));
+                                    }, timeout);
+                                });
+                            }
+                        };
+
+                        // Convenience aliases
+                        window.symposium.fs = window.symposium.fileSystem;
+                        window.symposium.db = window.symposium.database;
+                        window.symposium.net = window.symposium.network;
+                        window.symposium.proc = window.symposium.process;
+
+                        // Legacy compatibility aliases
+                        window.symposium.readFile = window.symposium.fileSystem.readFile.bind(window.symposium.fileSystem);
+                        window.symposium.writeFile = window.symposium.fileSystem.writeFile.bind(window.symposium.fileSystem);
+
+                        ${result.javascript || ''}
+                    </script>
                     </body>
                     </html>
                 `.trim();

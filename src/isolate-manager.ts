@@ -1,6 +1,8 @@
 // Isolate Manager for Symposium Demo
 // Manages Deno Web Workers as secure isolates for content block execution
 
+import { getOrchestrator } from './orchestrator/orchestrator-manager.ts';
+
 interface IsolateConfig {
   blockId: string;
   timeoutMs: number;
@@ -113,7 +115,11 @@ export class ContentBlockIsolate {
           result = await this.handleGetData(params.key);
           break;
         default:
-          throw new Error(`Unknown API method: ${method}`);
+          // Route capability requests to the orchestrator
+          console.log(`Routing capability request ${method} to orchestrator for isolate ${this.blockId}`);
+          const orchestrator = getOrchestrator();
+          result = await orchestrator.handleCapabilityRequest(this.blockId, method, params);
+          break;
       }
 
       // Send response back to isolate
@@ -197,12 +203,15 @@ export class ContentBlockIsolate {
         timestamp: Date.now()
       });
 
+      // Capture the class instance for use in nested function
+      const self = this;
+
       // Listen for response
       const handleResponse = (event: MessageEvent) => {
         const result = event.data;
         if (result.type === 'execution_result') {
           clearTimeout(timeoutId);
-          this.worker.removeEventListener('message', handleResponse);
+          self.worker.removeEventListener('message', handleResponse);
 
           if (result.success) {
             resolve(result);
@@ -228,12 +237,15 @@ export class ContentBlockIsolate {
         timestamp: Date.now()
       });
 
+      // Capture the class instance for use in nested function
+      const self = this;
+
       const handleResponse = (event: MessageEvent) => {
         const result = event.data;
         // Accept both 'update_result' and 'execution_result' since updates reuse execution logic
         if (result.type === 'update_result' || result.type === 'execution_result') {
           clearTimeout(timeoutId);
-          this.worker.removeEventListener('message', handleResponse);
+          self.worker.removeEventListener('message', handleResponse);
           resolve(result);
         }
       };

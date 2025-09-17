@@ -353,13 +353,48 @@ body {
     font-size: 1.1rem;
 }
 
-.content-block-header button {
+.content-block-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.permission-selector select {
+    padding: 6px 10px;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    background: white;
+    color: #333;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    min-width: 120px;
+    transition: all 0.2s ease;
+}
+
+.permission-selector select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+.content-block-buttons {
+    display: flex;
+    gap: 5px;
+}
+
+.content-block-buttons button {
     padding: 6px 12px;
     border: none;
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.8rem;
-    margin-left: 5px;
+    transition: all 0.2s ease;
+}
+
+.content-block-buttons button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .content-block-output {
@@ -395,8 +430,10 @@ body {
 .modal-content {
     background: white;
     border-radius: 12px;
+    display: grid;
+    grid-auto-rows: 50px 1fr 90px;
     width: 90%;
-    max-width: 800px;
+    height: 90%;
     max-height: 90vh;
     overflow-y: auto;
 }
@@ -538,6 +575,9 @@ body {
 /* Code editors */
 .code-editors {
     padding: 20px;
+    display: grid;
+    grid-auto-rows: 1fr 100px;
+    overflow: scroll;
 }
 
 .editor-section {
@@ -551,7 +591,7 @@ body {
 
 .editor-section textarea {
     width: 100%;
-    height: 150px;
+    height: 90%;
     padding: 12px;
     border: 2px solid #e0e0e0;
     border-radius: 8px;
@@ -1207,6 +1247,134 @@ body {
     background: #a8a8a8;
 }
 
+/* Permission Selector Styles */
+.permission-selector {
+    position: relative;
+    width: 100%;
+}
+
+.permission-dropdown-container {
+    position: relative;
+}
+
+.permission-selector-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #333;
+    min-width: 180px;
+    width: 100%;
+    transition: all 0.2s ease;
+}
+
+.permission-selector-btn:hover {
+    background: #e9ecef;
+    border-color: #667eea;
+}
+
+.permission-selector-btn.active {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-color: #667eea;
+}
+
+#current-permission {
+    flex: 1;
+    text-align: left;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.permission-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    max-height: 300px;
+    overflow: hidden;
+    display: none;
+}
+
+.permission-dropdown.show {
+    display: block;
+}
+
+.permission-list {
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+.permission-item {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    transition: all 0.2s ease;
+    font-size: 0.85rem;
+}
+
+.permission-item:hover {
+    background: #f8f9fa;
+}
+
+.permission-item.selected {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.permission-item:last-child {
+    border-bottom: none;
+}
+
+.permission-name {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.permission-description {
+    font-size: 0.75rem;
+    opacity: 0.8;
+    line-height: 1.3;
+}
+
+.permission-item.selected .permission-description {
+    opacity: 0.9;
+}
+
+/* Scrollbar for permission dropdown */
+.permission-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.permission-list::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+.permission-list::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+.permission-list::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
 /* Responsive adjustments for model selector */
 @media (max-width: 1024px) {
     .model-selector-btn {
@@ -1215,6 +1383,15 @@ body {
     }
 
     #current-model {
+        font-size: 0.8rem;
+    }
+
+    .permission-selector-btn {
+        min-width: 160px;
+        font-size: 0.8rem;
+    }
+
+    #current-permission {
         font-size: 0.8rem;
     }
 }
@@ -1230,11 +1407,29 @@ body {
         font-size: 0.75rem;
     }
 
+    .permission-selector-btn {
+        min-width: 140px;
+        padding: 6px 10px;
+        font-size: 0.75rem;
+    }
+
+    #current-permission {
+        font-size: 0.75rem;
+    }
+
     .model-dropdown {
         max-height: 250px;
     }
 
     .model-list {
+        max-height: 200px;
+    }
+
+    .permission-dropdown {
+        max-height: 250px;
+    }
+
+    .permission-list {
         max-height: 200px;
     }
 }

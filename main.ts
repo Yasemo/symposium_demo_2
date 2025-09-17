@@ -5,6 +5,7 @@ import { SymposiumChatHandler } from "./src/chat-handler.ts";
 import { GCPProvisioner } from "./src/gcp-provisioner.ts";
 import { createServiceManagers, DatabaseManager } from "./src/database-manager.ts";
 import { getEnvLoader } from "./src/env-loader.ts";
+import { initializeOrchestrator, getOrchestrator } from "./src/orchestrator/orchestrator-manager.ts";
 
 // Load environment configuration asynchronously
 console.log('🚀 Starting Symposium Demo...');
@@ -162,12 +163,19 @@ async function initializeServices() {
   await chatHandler.loadAllSessions();
   console.log('   ✅ Chat sessions loaded from database');
 
+  // Initialize isolate orchestrator proxy system
+  console.log('🔧 Initializing Isolate Orchestrator Proxy...');
+  const orchestrator = await initializeOrchestrator(databaseManager);
+  console.log('   ✅ Isolate orchestrator initialized');
+  console.log(`   📊 Supported operations: ${orchestrator.getSupportedOperations().join(', ')}`);
+
   console.log('\n' + '=' .repeat(50));
   console.log('✅ All Services Initialized Successfully!');
   console.log('📊 Service Status Summary:');
   console.log(`   🔌 Database: ${databaseManager.getConnectionInfo().type} (${databaseManager.getConnectionInfo().status})`);
   console.log(`   ⚡ Isolates: ${isolateStats.activeIsolates}/${isolateStats.maxIsolates} active`);
   console.log(`   🤖 AI: OpenRouter ${openRouterClient ? 'Connected' : 'Disconnected'}`);
+  console.log(`   🔌 Orchestrator: ${orchestrator.getStats().handlers.registered} handlers registered`);
   console.log('=' .repeat(50) + '\n');
 }
 
@@ -267,11 +275,17 @@ function handleWebSocket(socket: WebSocket) {
         case "change_model":
           handleChangeModel(socket, message);
           break;
+        case "change_block_permission":
+          handleChangeBlockPermission(socket, message);
+          break;
         case "get_chat_history":
           handleGetChatHistory(socket, message);
           break;
         case "clear_chat_history":
           handleClearChatHistory(socket, message);
+          break;
+        case "apiCall":
+          handleIsolateAPICall(socket, message);
           break;
         default:
           console.log("Unknown message type:", message.type);
@@ -351,6 +365,15 @@ async function handleContentExecution(socket: WebSocket, message: any) {
     // Execute content block in isolate with version tracking
     console.log(`Executing content block ${blockId} in isolate`);
     const result = await contentExecutor.executeContentBlockWithVersion(blockId, executionCode, changeType, metadata);
+
+    // Assign database permissions to the isolate after creation
+    try {
+      const orchestrator = getOrchestrator();
+      orchestrator.assignPermissions(blockId, 'data'); // Give data permissions for database access
+      console.log(`Assigned data permissions to isolate ${blockId}`);
+    } catch (error) {
+      console.warn(`Failed to assign permissions to isolate ${blockId}:`, error);
+    }
 
     socket.send(JSON.stringify({
       type: "content_executed",
@@ -432,19 +455,26 @@ async function handleIframeAPICall(socket: WebSocket, message: any) {
 
     let result;
 
-    // Handle the API call based on method
-    switch (method) {
-      case 'saveData':
-        result = await contentExecutor.saveContentBlockData(blockId, params.key, params.value);
-        break;
-      case 'getData':
-        result = await contentExecutor.getContentBlockData(blockId, params.key);
-        break;
-      case 'deleteData':
-        result = await contentExecutor.deleteContentBlockData(blockId, params.key);
-        break;
-      default:
-        throw new Error(`Unknown API method: ${method}`);
+    // Route database operations to the orchestrator
+    if (method.startsWith('database.')) {
+      console.log(`Routing database operation ${method} to orchestrator`);
+      const orchestrator = getOrchestrator();
+      result = await orchestrator.handleCapabilityRequest(blockId, method, params);
+    } else {
+      // Handle legacy data operations directly
+      switch (method) {
+        case 'saveData':
+          result = await contentExecutor.saveContentBlockData(blockId, params.key, params.value);
+          break;
+        case 'getData':
+          result = await contentExecutor.getContentBlockData(blockId, params.key);
+          break;
+        case 'deleteData':
+          result = await contentExecutor.deleteContentBlockData(blockId, params.key);
+          break;
+        default:
+          throw new Error(`Unknown API method: ${method}`);
+      }
     }
 
     // Send response back to client (which will forward to iframe)
@@ -706,6 +736,90 @@ async function handleChangeModel(socket: WebSocket, message: any) {
   }
 }
 
+// Handle change permission requests
+async function handleChangePermission(socket: WebSocket, message: any) {
+  try {
+    const { permission } = message;
+
+    console.log(`Changing permission level to: ${permission}`);
+
+    // Validate permission level
+    const validPermissions = ['basic', 'interactive', 'data', 'advanced'];
+    if (!validPermissions.includes(permission)) {
+      socket.send(JSON.stringify({
+        type: "error",
+        error: `Invalid permission level: ${permission}. Valid options: ${validPermissions.join(', ')}`
+      }));
+      return;
+    }
+
+    // For now, we'll just acknowledge the permission change
+    // In a full implementation, this would update the permission system
+    // and potentially restart isolates with new permissions
+
+    socket.send(JSON.stringify({
+      type: "permission_changed",
+      permission: permission,
+      success: true
+    }));
+
+    console.log(`Successfully changed permission level to: ${permission}`);
+
+  } catch (error) {
+    console.error("Change permission error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "permission_changed",
+      permission: message.permission,
+      success: false,
+      error: errorMessage
+    }));
+  }
+}
+
+// Handle change block permission requests
+async function handleChangeBlockPermission(socket: WebSocket, message: any) {
+  try {
+    const { blockId, permission } = message;
+
+    console.log(`Changing permission level for block ${blockId} to: ${permission}`);
+
+    // Validate permission level
+    const validPermissions = ['basic', 'interactive', 'data', 'advanced'];
+    if (!validPermissions.includes(permission)) {
+      socket.send(JSON.stringify({
+        type: "error",
+        error: `Invalid permission level: ${permission}. Valid options: ${validPermissions.join(', ')}`
+      }));
+      return;
+    }
+
+    // Get the orchestrator to update block permissions
+    const orchestrator = getOrchestrator();
+    await orchestrator.updateBlockPermission(blockId, permission);
+
+    socket.send(JSON.stringify({
+      type: "block_permission_changed",
+      blockId: blockId,
+      permission: permission,
+      success: true
+    }));
+
+    console.log(`Successfully changed permission level for block ${blockId} to: ${permission}`);
+
+  } catch (error) {
+    console.error("Change block permission error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    socket.send(JSON.stringify({
+      type: "block_permission_changed",
+      blockId: message.blockId,
+      permission: message.permission,
+      success: false,
+      error: errorMessage
+    }));
+  }
+}
+
 // Handle get chat history requests
 async function handleGetChatHistory(socket: WebSocket, message: any) {
   try {
@@ -765,6 +879,43 @@ async function handleClearChatHistory(socket: WebSocket, message: any) {
     socket.send(JSON.stringify({
       type: "error",
       error: `Failed to clear chat history: ${errorMessage}`
+    }));
+  }
+}
+
+// Handle isolate API calls (orchestrator proxy)
+async function handleIsolateAPICall(socket: WebSocket, message: any) {
+  try {
+    const { blockId, method, params, callId } = message;
+
+    console.log(`Handling isolate API call: ${method} for block ${blockId} (callId: ${callId})`);
+
+    // Get the orchestrator instance
+    const orchestrator = getOrchestrator();
+
+    // Route the capability request to the orchestrator
+    const result = await orchestrator.handleCapabilityRequest(blockId, method, params);
+
+    // Send response back to the isolate via WebSocket
+    socket.send(JSON.stringify({
+      type: "iframe_api_response",
+      blockId,
+      callId,
+      result
+    }));
+
+    console.log(`Successfully processed ${method} for isolate ${blockId}`);
+
+  } catch (error) {
+    console.error("Isolate API call error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // Send error response back to the isolate
+    socket.send(JSON.stringify({
+      type: "iframe_api_response",
+      blockId: message.blockId,
+      callId: message.callId,
+      error: errorMessage
     }));
   }
 }

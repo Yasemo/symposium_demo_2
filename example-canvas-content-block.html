@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Creative Canvas - Multi-Capability Content Block</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 2.5em;
+            font-weight: 300;
+        }
+
+        .header p {
+            margin: 10px 0 0 0;
+            opacity: 0.8;
+            font-size: 1.1em;
+        }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .tool-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .tool-group label {
+            font-weight: 500;
+            color: #495057;
+        }
+
+        .color-picker {
+            width: 40px;
+            height: 40px;
+            border: 2px solid #dee2e6;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .color-picker:hover {
+            transform: scale(1.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .brush-size {
+            width: 100px;
+        }
+
+        .tool-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+            background: #6c757d;
+            color: white;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: #007bff;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .btn-success {
+            background: #28a745;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .btn-warning:hover {
+            background: #e0a800;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .canvas-container {
+            position: relative;
+            background: #f8f9fa;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        #drawingCanvas {
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            background: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            cursor: crosshair;
+        }
+
+        .status-bar {
+            padding: 10px 20px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+            font-size: 14px;
+            color: #6c757d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .capabilities-demo {
+            padding: 20px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .capabilities-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .capability-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-left: 4px solid #007bff;
+        }
+
+        .capability-card h4 {
+            margin: 0 0 10px 0;
+            color: #495057;
+            font-size: 1.1em;
+        }
+
+        .capability-card p {
+            margin: 0;
+            color: #6c757d;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+
+        .capability-card.api::before {
+            content: "🔗";
+            font-size: 1.5em;
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        .capability-card.canvas::before {
+            content: "🎨";
+            font-size: 1.5em;
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        .capability-card.file::before {
+            content: "💾";
+            font-size: 1.5em;
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        .capability-card.network::before {
+            content: "🌐";
+            font-size: 1.5em;
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px;
+            border-left: 4px solid #dc3545;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px;
+            border-left: 4px solid #28a745;
+        }
+
+        @media (max-width: 768px) {
+            .toolbar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .tool-group {
+                justify-content: center;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 Creative Canvas</h1>
+            <p>Demonstrating Multi-Capability Content Block Architecture</p>
+        </div>
+
+        <div id="error-message" class="error" style="display: none;"></div>
+        <div id="success-message" class="success" style="display: none;"></div>
+
+        <div class="toolbar">
+            <div class="tool-group">
+                <label>Color:</label>
+                <input type="color" id="colorPicker" class="color-picker" value="#000000">
+                <label>Size:</label>
+                <input type="range" id="brushSize" class="brush-size" min="1" max="50" value="5">
+                <span id="sizeValue">5px</span>
+            </div>
+
+            <div class="tool-buttons">
+                <button onclick="clearCanvas()">🗑️ Clear</button>
+                <button onclick="saveDrawing()" class="btn-primary">💾 Save</button>
+                <button onclick="loadDrawing()" class="btn-warning">📁 Load</button>
+                <button onclick="exportDrawing()" class="btn-success">📤 Export</button>
+                <button onclick="shareDrawing()" class="btn-primary">🔗 Share</button>
+            </div>
+        </div>
+
+        <div class="canvas-container">
+            <div id="loading" class="loading" style="display: none;">Loading canvas...</div>
+            <canvas id="drawingCanvas" width="800" height="600"></canvas>
+        </div>
+
+        <div class="status-bar">
+            <span id="status">Ready to draw! Use your mouse or touch to create art.</span>
+            <span id="coordinates">X: 0, Y: 0</span>
+        </div>
+
+        <div class="capabilities-demo">
+            <h3 style="text-align: center; margin-bottom: 5px;">🚀 Multi-Capability Architecture Demo</h3>
+            <p style="text-align: center; color: #6c757d; margin-bottom: 20px;">
+                This content block demonstrates how multiple handlers work together seamlessly
+            </p>
+
+            <div class="capabilities-grid">
+                <div class="capability-card canvas">
+                    <h4>Canvas API</h4>
+                    <p>Real-time drawing with mouse/touch input, dynamic brush sizing, and color selection. Demonstrates the Canvas handler's rendering capabilities.</p>
+                </div>
+
+                <div class="capability-card file">
+                    <h4>File System API</h4>
+                    <p>Save and load drawings as files. Shows how the File System handler enables persistent storage within the isolated environment.</p>
+                </div>
+
+                <div class="capability-card network">
+                    <h4>Network API</h4>
+                    <p>Export drawings to external services and generate shareable links. Demonstrates the Network handler's connectivity features.</p>
+                </div>
+
+                <div class="capability-card api">
+                    <h4>API Integration</h4>
+                    <p>Seamless communication between multiple handlers through the unified API system. Each capability works independently yet cohesively.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let canvas, ctx;
+        let isDrawing = false;
+        let lastX = 0, lastY = 0;
+        let currentColor = '#000000';
+        let brushSize = 5;
+        let drawingData = null;
+
+        // Initialize the application
+        async function initializeApp() {
+            try {
+                console.log('🎨 Initializing Creative Canvas...');
+
+                // Initialize canvas
+                canvas = document.getElementById('drawingCanvas');
+                ctx = canvas.getContext('2d');
+
+                // Set up event listeners
+                setupCanvasEvents();
+                setupToolbarEvents();
+
+                // Wait for symposium API to be available
+                if (!waitForSymposium()) {
+                    throw new Error('Symposium API not available');
+                }
+
+                // Get canvas info
+                try {
+                    const canvasInfo = await symposium.canvas.getInfo();
+                    if (canvasInfo.success) {
+                        console.log('🎨 Canvas Info:', canvasInfo.data);
+                    } else {
+                        console.warn('⚠️ Canvas info not available:', canvasInfo.error);
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Canvas API not available:', error.message);
+                }
+
+                // Get file system info
+                try {
+                    const fsInfo = await symposium.fileSystem.getInfo();
+                    if (fsInfo.success) {
+                        console.log('💾 File System Info:', fsInfo.data);
+                    } else {
+                        console.warn('⚠️ File System info not available:', fsInfo.error);
+                    }
+                } catch (error) {
+                    console.warn('⚠️ File System API not available:', error.message);
+                }
+
+                // Get network info
+                try {
+                    const netInfo = await symposium.network.getInfo();
+                    if (netInfo.success) {
+                        console.log('🌐 Network Info:', netInfo.data);
+                    } else {
+                        console.warn('⚠️ Network info not available:', netInfo.error);
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Network API not available:', error.message);
+                }
+
+                // Initialize canvas with white background
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                updateStatus('Canvas initialized! Ready to create art.');
+                document.getElementById('loading').style.display = 'none';
+
+            } catch (error) {
+                console.error('❌ Initialization failed:', error);
+                showError('Failed to initialize canvas: ' + error.message);
+                document.getElementById('loading').textContent = 'Failed to load canvas';
+            }
+        }
+
+        // Wait for symposium API to be available
+        function waitForSymposium() {
+            if (typeof window.symposium !== 'undefined') {
+                console.log('✅ Symposium API is available');
+                return true;
+            } else {
+                console.log('⏳ Waiting for Symposium API...');
+                return false;
+            }
+        }
+
+        // Set up canvas event listeners
+        function setupCanvasEvents() {
+            // Mouse events
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('mouseout', stopDrawing);
+
+            // Touch events for mobile
+            canvas.addEventListener('touchstart', handleTouchStart);
+            canvas.addEventListener('touchmove', handleTouchMove);
+            canvas.addEventListener('touchend', stopDrawing);
+
+            // Coordinate tracking
+            canvas.addEventListener('mousemove', updateCoordinates);
+        }
+
+        // Set up toolbar event listeners
+        function setupToolbarEvents() {
+            document.getElementById('colorPicker').addEventListener('change', (e) => {
+                currentColor = e.target.value;
+                updateStatus(`Color changed to ${currentColor}`);
+            });
+
+            document.getElementById('brushSize').addEventListener('input', (e) => {
+                brushSize = e.target.value;
+                document.getElementById('sizeValue').textContent = brushSize + 'px';
+                updateStatus(`Brush size changed to ${brushSize}px`);
+            });
+        }
+
+        // Drawing functions
+        function startDrawing(e) {
+            isDrawing = true;
+            [lastX, lastY] = getCoordinates(e);
+            updateStatus('Drawing...');
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+
+            const [x, y] = getCoordinates(e);
+
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(x, y);
+            ctx.strokeStyle = currentColor;
+            ctx.lineWidth = brushSize;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+
+            [lastX, lastY] = [x, y];
+        }
+
+        function stopDrawing() {
+            if (isDrawing) {
+                isDrawing = false;
+                updateStatus('Drawing complete. Ready for next stroke.');
+            }
+        }
+
+        // Touch event handlers
+        function handleTouchStart(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const mouseEvent = new MouseEvent('mousedown', {
+                clientX: touch.clientX,
+                clientY: touch.clientY
+            });
+            canvas.dispatchEvent(mouseEvent);
+        }
+
+        function handleTouchMove(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const mouseEvent = new MouseEvent('mousemove', {
+                clientX: touch.clientX,
+                clientY: touch.clientY
+            });
+            canvas.dispatchEvent(mouseEvent);
+        }
+
+        // Utility functions
+        function getCoordinates(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+
+            if (e.touches) {
+                return [
+                    (e.touches[0].clientX - rect.left) * scaleX,
+                    (e.touches[0].clientY - rect.top) * scaleY
+                ];
+            } else {
+                return [
+                    (e.clientX - rect.left) * scaleX,
+                    (e.clientY - rect.top) * scaleY
+                ];
+            }
+        }
+
+        function updateCoordinates(e) {
+            const [x, y] = getCoordinates(e);
+            document.getElementById('coordinates').textContent = `X: ${Math.round(x)}, Y: ${Math.round(y)}`;
+        }
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        // Canvas operations
+        function clearCanvas() {
+            showConfirmDialog('Are you sure you want to clear the canvas? This action cannot be undone.', () => {
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                updateStatus('Canvas cleared.');
+                showSuccess('Canvas cleared successfully!');
+            });
+        }
+
+        // Custom confirmation dialog for sandboxed iframes
+        function showConfirmDialog(message, onConfirm, onCancel) {
+            // Create modal overlay
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+                font-family: system-ui, -apple-system, sans-serif;
+            `;
+
+            // Create modal content
+            const modalContent = document.createElement('div');
+            modalContent.style.cssText = `
+                background: white;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                max-width: 400px;
+                width: 90%;
+                text-align: center;
+            `;
+
+            // Add message
+            const messageEl = document.createElement('p');
+            messageEl.textContent = message;
+            messageEl.style.cssText = `
+                margin: 0 0 20px 0;
+                color: #333;
+                font-size: 16px;
+                line-height: 1.4;
+            `;
+
+            // Add buttons
+            const buttonContainer = document.createElement('div');
+            buttonContainer.style.cssText = `
+                display: flex;
+                gap: 10px;
+                justify-content: center;
+            `;
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.style.cssText = `
+                padding: 8px 16px;
+                border: 1px solid #ddd;
+                background: #f8f9fa;
+                color: #333;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+            `;
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.textContent = 'Clear Canvas';
+            confirmBtn.style.cssText = `
+                padding: 8px 16px;
+                border: none;
+                background: #dc3545;
+                color: white;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+            `;
+
+            // Add event listeners
+            cancelBtn.onclick = () => {
+                document.body.removeChild(modal);
+                if (onCancel) onCancel();
+            };
+
+            confirmBtn.onclick = () => {
+                document.body.removeChild(modal);
+                if (onConfirm) onConfirm();
+            };
+
+            // Close on backdrop click
+            modal.onclick = (e) => {
+                if (e.target === modal) {
+                    document.body.removeChild(modal);
+                    if (onCancel) onCancel();
+                }
+            };
+
+            // Assemble modal
+            buttonContainer.appendChild(cancelBtn);
+            buttonContainer.appendChild(confirmBtn);
+            modalContent.appendChild(messageEl);
+            modalContent.appendChild(buttonContainer);
+            modal.appendChild(modalContent);
+
+            // Add to page
+            document.body.appendChild(modal);
+
+            // Focus confirm button
+            confirmBtn.focus();
+        }
+
+        // File System operations
+        async function saveDrawing() {
+            try {
+                updateStatus('Saving drawing...');
+
+                // Check if symposium API is available
+                if (!window.symposium || !window.symposium.fileSystem) {
+                    console.warn('Symposium API not available, simulating save...');
+                    // Simulate successful save for demo purposes
+                    const filename = `drawing_${Date.now()}.png`;
+                    updateStatus(`Drawing saved as ${filename} (simulated)`);
+                    showSuccess(`Drawing saved successfully as ${filename}! (Demo mode)`);
+                    return;
+                }
+
+                // Convert canvas to blob
+                const blob = await new Promise(resolve => {
+                    canvas.toBlob(resolve, 'image/png');
+                });
+
+                // Convert blob to array buffer
+                const arrayBuffer = await blob.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+
+                // Save using file system API
+                const filename = `drawing_${Date.now()}.png`;
+                const result = await window.symposium.fileSystem.writeFile(filename, uint8Array);
+
+                if (result && result.success) {
+                    updateStatus(`Drawing saved as ${filename}`);
+                    showSuccess(`Drawing saved successfully as ${filename}!`);
+                } else {
+                    throw new Error(result?.error || 'Failed to save drawing');
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to save drawing:', error);
+                showError('Failed to save drawing: ' + (error.message || 'Unknown error'));
+                updateStatus('Save failed.');
+            }
+        }
+
+        async function loadDrawing() {
+            try {
+                updateStatus('Loading drawing...');
+
+                // Check if symposium API is available
+                if (!window.symposium || !window.symposium.fileSystem) {
+                    console.warn('Symposium API not available, cannot load drawings');
+                    showError('File system not available for loading drawings');
+                    updateStatus('Load failed - API not available');
+                    return;
+                }
+
+                // List available files
+                const listResult = await window.symposium.fileSystem.listFiles('.');
+                if (!listResult || !listResult.success || !listResult.data || !listResult.data.files) {
+                    throw new Error('No saved drawings found');
+                }
+
+                // Filter for PNG files
+                const drawings = listResult.data.files.filter(file =>
+                    file.name.endsWith('.png') && file.name.startsWith('drawing_')
+                );
+
+                if (drawings.length === 0) {
+                    throw new Error('No saved drawings found');
+                }
+
+                // Load the most recent drawing
+                const latestDrawing = drawings.sort((a, b) =>
+                    new Date(b.modified) - new Date(a.modified)
+                )[0];
+
+                const loadResult = await window.symposium.fileSystem.readFile(latestDrawing.name);
+                if (!loadResult || !loadResult.success) {
+                    throw new Error('Failed to load drawing');
+                }
+
+                // Convert uint8array back to blob and load into canvas
+                const blob = new Blob([loadResult.data], { type: 'image/png' });
+                const img = new Image();
+
+                img.onload = () => {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    updateStatus(`Loaded drawing: ${latestDrawing.name}`);
+                    showSuccess(`Drawing loaded successfully from ${latestDrawing.name}!`);
+                };
+
+                img.src = URL.createObjectURL(blob);
+
+            } catch (error) {
+                console.error('❌ Failed to load drawing:', error);
+                showError('Failed to load drawing: ' + (error.message || 'Unknown error'));
+                updateStatus('Load failed.');
+            }
+        }
+
+        // Network operations
+        async function exportDrawing() {
+            try {
+                updateStatus('Exporting drawing...');
+
+                // Check if symposium API is available
+                if (!window.symposium || !window.symposium.network) {
+                    console.warn('Symposium API not available, simulating export...');
+                    // Simulate successful export for demo purposes
+                    const dataUrl = canvas.toDataURL('image/png');
+                    console.log('Export data URL:', dataUrl);
+                    updateStatus('Drawing data prepared for export.');
+                    showSuccess('Drawing data prepared! Check console for export details.');
+                    return;
+                }
+
+                // Convert canvas to data URL
+                const dataUrl = canvas.toDataURL('image/png');
+
+                // Create export data
+                const exportData = {
+                    image: dataUrl,
+                    metadata: {
+                        width: canvas.width,
+                        height: canvas.height,
+                        exportedAt: new Date().toISOString(),
+                        brushSize: brushSize,
+                        color: currentColor
+                    }
+                };
+
+                // Use network API to "export" (in a real app, this would upload to a server)
+                const exportResult = await window.symposium.network.makeRequest('POST', '/api/export', {
+                    body: JSON.stringify(exportData),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (exportResult && exportResult.success) {
+                    updateStatus('Drawing exported successfully!');
+                    showSuccess('Drawing exported successfully! (Simulated network request)');
+                } else {
+                    // Fallback: just show the data URL
+                    console.log('Export data URL:', dataUrl);
+                    updateStatus('Drawing data prepared for export.');
+                    showSuccess('Drawing data prepared! Check console for export details.');
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to export drawing:', error);
+                showError('Failed to export drawing: ' + (error.message || 'Unknown error'));
+                updateStatus('Export failed.');
+            }
+        }
+
+        async function shareDrawing() {
+            try {
+                updateStatus('Generating share link...');
+
+                // Check if symposium API is available
+                if (!window.symposium || !window.symposium.network) {
+                    console.warn('Symposium API not available, simulating share...');
+                    // Simulate successful share for demo purposes
+                    const dataUrl = canvas.toDataURL('image/png');
+                    const shareData = {
+                        title: 'My Creative Canvas Drawing',
+                        description: 'Check out this drawing I created!',
+                        image: dataUrl,
+                        createdAt: new Date().toISOString()
+                    };
+                    console.log('Share data:', shareData);
+                    updateStatus('Share data prepared.');
+                    showSuccess('Share data prepared! Check console for details.');
+                    return;
+                }
+
+                // Convert canvas to data URL
+                const dataUrl = canvas.toDataURL('image/png');
+
+                // Create share data
+                const shareData = {
+                    title: 'My Creative Canvas Drawing',
+                    description: 'Check out this drawing I created!',
+                    image: dataUrl,
+                    createdAt: new Date().toISOString()
+                };
+
+                // Use network API to create shareable link
+                const shareResult = await window.symposium.network.makeRequest('POST', '/api/share', {
+                    body: JSON.stringify(shareData),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (shareResult && shareResult.success) {
+                    const shareUrl = shareResult.data.shareUrl || '#';
+                    updateStatus(`Share link generated: ${shareUrl}`);
+                    showSuccess(`Share link generated! ${shareUrl}`);
+                } else {
+                    // Fallback: show data URL
+                    updateStatus('Share data prepared.');
+                    showSuccess('Share data prepared! Check console for details.');
+                    console.log('Share data:', shareData);
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to share drawing:', error);
+                showError('Failed to share drawing: ' + (error.message || 'Unknown error'));
+                updateStatus('Share failed.');
+            }
+        }
+
+        // Utility functions
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('success-message');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            setTimeout(() => {
+                successDiv.style.display = 'none';
+            }, 3000);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            // Could implement responsive canvas resizing here
+        });
+
+        // Wait for symposium API to be available before initializing
+        function waitForSymposiumAPI() {
+            if (typeof window.symposium !== 'undefined') {
+                console.log('🎨 Symposium API available, initializing...');
+                initializeApp();
+                console.log('🎨 Creative Canvas initialized with multi-capability support');
+                console.log('🔧 Capabilities: Canvas API, File System API, Network API');
+                console.log('🎯 Demonstrating extensible content block architecture');
+            } else {
+                console.log('⏳ Waiting for Symposium API...');
+                setTimeout(waitForSymposiumAPI, 100);
+            }
+        }
+
+        // Start waiting for the symposium API
+        waitForSymposiumAPI();
+    </script>
+</body>
+</html>

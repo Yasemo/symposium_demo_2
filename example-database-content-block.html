@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Task Manager with Database</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+
+        .task-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        .delete-btn {
+            background: #dc3545;
+        }
+
+        .delete-btn:hover {
+            background: #c82333;
+        }
+
+        .complete-btn {
+            background: #28a745;
+        }
+
+        .complete-btn:hover {
+            background: #218838;
+        }
+
+        .task-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            background: white;
+        }
+
+        .task-item.completed {
+            background: #f8f9fa;
+            text-decoration: line-through;
+            color: #6c757d;
+        }
+
+        .task-text {
+            flex: 1;
+            font-size: 16px;
+        }
+
+        .task-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .stats {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 Task Manager with Database</h1>
+
+        <div id="error-message" class="error" style="display: none;"></div>
+
+        <div class="task-form">
+            <input type="text" id="taskInput" placeholder="Enter a new task..." maxlength="200">
+            <button onclick="addTask()">Add Task</button>
+        </div>
+
+        <div id="loading" class="loading">Loading tasks...</div>
+
+        <div id="taskList">
+            <!-- Tasks will be loaded here -->
+        </div>
+
+        <div id="stats" class="stats" style="display: none;">
+            <!-- Statistics will be shown here -->
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let tasks = [];
+        let dbInfo = null;
+
+        // Initialize the application
+        async function initializeApp() {
+            try {
+                console.log('🚀 Initializing Task Manager...');
+
+                // Get database information
+                const infoResult = await symposium.database.getInfo();
+                if (infoResult.success) {
+                    dbInfo = infoResult.data;
+                    console.log('📊 Database Info:', dbInfo);
+                }
+
+                // Initialize database schema
+                await initializeDatabase();
+
+                // Load existing tasks
+                await loadTasks();
+
+                // Update statistics
+                await updateStats();
+
+                document.getElementById('loading').style.display = 'none';
+
+            } catch (error) {
+                console.error('❌ Initialization failed:', error);
+                showError('Failed to initialize application: ' + error.message);
+                document.getElementById('loading').textContent = 'Failed to load tasks';
+            }
+        }
+
+        // Initialize database schema
+        async function initializeDatabase() {
+            try {
+                console.log('🗄️ Initializing database schema...');
+
+                // Create tasks table
+                await symposium.database.query(`
+                    CREATE TABLE IF NOT EXISTS tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        text TEXT NOT NULL,
+                        completed BOOLEAN DEFAULT FALSE,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER
+                    )
+                `);
+
+                // Create indexes for better performance
+                await symposium.database.query(`
+                    CREATE INDEX IF NOT EXISTS idx_tasks_completed ON tasks(completed)
+                `);
+
+                await symposium.database.query(`
+                    CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC)
+                `);
+
+                console.log('✅ Database schema initialized');
+
+            } catch (error) {
+                console.error('❌ Database initialization failed:', error);
+                throw error;
+            }
+        }
+
+        // Load tasks from database
+        async function loadTasks() {
+            try {
+                console.log('📋 Loading tasks from database...');
+
+                const result = await symposium.database.query(
+                    'SELECT * FROM tasks ORDER BY created_at DESC'
+                );
+
+                if (result.success && result.data.rows) {
+                    tasks = result.data.rows;
+                    console.log(`✅ Loaded ${tasks.length} tasks`);
+                    displayTasks();
+                } else {
+                    tasks = [];
+                    console.log('ℹ️ No tasks found');
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to load tasks:', error);
+                throw error;
+            }
+        }
+
+        // Add a new task
+        async function addTask() {
+            const input = document.getElementById('taskInput');
+            const text = input.value.trim();
+
+            if (!text) {
+                showError('Please enter a task description');
+                return;
+            }
+
+            if (text.length > 200) {
+                showError('Task description is too long (max 200 characters)');
+                return;
+            }
+
+            try {
+                console.log('➕ Adding new task:', text);
+
+                const result = await symposium.database.query(
+                    'INSERT INTO tasks (text, completed, created_at) VALUES (?, ?, ?)',
+                    [text, false, Date.now()]
+                );
+
+                if (result.success) {
+                    console.log('✅ Task added successfully');
+                    input.value = '';
+
+                    // Reload tasks to get the new task with its ID
+                    await loadTasks();
+                    await updateStats();
+
+                    hideError();
+                } else {
+                    throw new Error('Failed to add task');
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to add task:', error);
+                showError('Failed to add task: ' + error.message);
+            }
+        }
+
+        // Toggle task completion
+        async function toggleTask(taskId) {
+            try {
+                const task = tasks.find(t => t.id === taskId);
+                if (!task) {
+                    throw new Error('Task not found');
+                }
+
+                const newCompleted = !task.completed;
+                console.log(`${newCompleted ? '✅' : '⏳'} Updating task ${taskId} completion to ${newCompleted}`);
+
+                const result = await symposium.database.query(
+                    'UPDATE tasks SET completed = ?, updated_at = ? WHERE id = ?',
+                    [newCompleted, Date.now(), taskId]
+                );
+
+                if (result.success) {
+                    console.log('✅ Task updated successfully');
+                    await loadTasks();
+                    await updateStats();
+                } else {
+                    throw new Error('Failed to update task');
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to update task:', error);
+                showError('Failed to update task: ' + error.message);
+            }
+        }
+
+        // Delete a task
+        async function deleteTask(taskId) {
+            if (!confirm('Are you sure you want to delete this task?')) {
+                return;
+            }
+
+            try {
+                console.log('🗑️ Deleting task:', taskId);
+
+                const result = await symposium.database.query(
+                    'DELETE FROM tasks WHERE id = ?',
+                    [taskId]
+                );
+
+                if (result.success) {
+                    console.log('✅ Task deleted successfully');
+                    await loadTasks();
+                    await updateStats();
+                } else {
+                    throw new Error('Failed to delete task');
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to delete task:', error);
+                showError('Failed to delete task: ' + error.message);
+            }
+        }
+
+        // Display tasks in the UI
+        function displayTasks() {
+            const taskList = document.getElementById('taskList');
+            taskList.innerHTML = '';
+
+            if (tasks.length === 0) {
+                taskList.innerHTML = '<p style="text-align: center; color: #666; padding: 20px;">No tasks yet. Add your first task above!</p>';
+                return;
+            }
+
+            tasks.forEach(task => {
+                const taskDiv = document.createElement('div');
+                taskDiv.className = 'task-item' + (task.completed ? ' completed' : '');
+
+                taskDiv.innerHTML = `
+                    <span class="task-text">${escapeHtml(task.text)}</span>
+                    <div class="task-actions">
+                        <button class="complete-btn" onclick="toggleTask(${task.id})">
+                            ${task.completed ? '↩️ Undo' : '✅ Complete'}
+                        </button>
+                        <button class="delete-btn" onclick="deleteTask(${task.id})">
+                            🗑️ Delete
+                        </button>
+                    </div>
+                `;
+
+                taskList.appendChild(taskDiv);
+            });
+        }
+
+        // Update statistics
+        async function updateStats() {
+            try {
+                const result = await symposium.database.query(`
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) as completed,
+                        SUM(CASE WHEN completed = 0 THEN 1 ELSE 0 END) as pending
+                    FROM tasks
+                `);
+
+                if (result.success && result.data.rows && result.data.rows.length > 0) {
+                    const stats = result.data.rows[0];
+
+                    const statsDiv = document.getElementById('stats');
+                    statsDiv.innerHTML = `
+                        <strong>📊 Task Statistics</strong><br>
+                        Total: ${stats.total} |
+                        Completed: ${stats.completed || 0} |
+                        Pending: ${stats.pending || 0}
+                    `;
+                    statsDiv.style.display = 'block';
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to update stats:', error);
+            }
+        }
+
+        // Utility functions
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function hideError() {
+            document.getElementById('error-message').style.display = 'none';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Handle Enter key in input
+        document.getElementById('taskInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                addTask();
+            }
+        });
+
+        // Initialize the application when the page loads
+        initializeApp();
+
+        // Log database information
+        console.log('🎯 Task Manager initialized with database support');
+        console.log('📊 Database Type:', dbInfo?.connectionType || 'unknown');
+        console.log('🔒 Data automatically isolated per content block');
+    </script>
+</body>
+</html>

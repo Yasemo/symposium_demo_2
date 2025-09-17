@@ -1,8 +1,7 @@
 {
   "compilerOptions": {
     "lib": ["deno.window", "deno.unstable"],
-    "strict": true,
-    "unstable": ["kv"]
+    "strict": true
   },
   "imports": {
     "std/": "https://deno.land/std@0.208.0/",

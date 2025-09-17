@@ -3,6 +3,7 @@
 
 import { SymposiumIsolateManager, ContentBlockIsolate } from './isolate-manager.ts';
 import { envLoader } from './env-loader.ts';
+import { getOrchestrator } from './orchestrator/orchestrator-manager.ts';
 
 // Deno KV is built-in to Deno 2.0+
 const { openKv } = Deno;
@@ -172,6 +173,15 @@ export class SymposiumContentExecutor implements ContentExecutor {
             allowFetch: true
           }
         });
+
+        // Assign default permissions to the new isolate
+        try {
+          const orchestrator = getOrchestrator();
+          orchestrator.assignPermissions(blockId, 'data'); // Default to data permissions
+          console.log(`🔐 Assigned 'data' permissions to isolate ${blockId}`);
+        } catch (error) {
+          console.error(`Failed to assign permissions to isolate ${blockId}:`, error);
+        }
       }
 
       // Execute code in isolate
@@ -242,6 +252,15 @@ export class SymposiumContentExecutor implements ContentExecutor {
             }
           });
 
+          // Assign default permissions to the recreated isolate
+          try {
+            const orchestrator = getOrchestrator();
+            orchestrator.assignPermissions(blockId, 'data');
+            console.log(`🔐 Assigned 'data' permissions to recreated isolate ${blockId}`);
+          } catch (error) {
+            console.error(`Failed to assign permissions to recreated isolate ${blockId}:`, error);
+          }
+
           // Execute current code in the new isolate first
           await isolate.executeCode(currentCode);
           console.log(`Isolate recreated and initialized for block ${blockId}`);
@@ -264,6 +283,15 @@ export class SymposiumContentExecutor implements ContentExecutor {
               allowFetch: true
             }
           });
+
+          // Assign default permissions to the new isolate
+          try {
+            const orchestrator = getOrchestrator();
+            orchestrator.assignPermissions(blockId, 'data');
+            console.log(`🔐 Assigned 'data' permissions to new isolate ${blockId}`);
+          } catch (error) {
+            console.error(`Failed to assign permissions to new isolate ${blockId}:`, error);
+          }
 
           // Execute the updates as new content
           const result = await isolate.executeCode(updates as ContentBlockCode);
@@ -343,13 +371,16 @@ export class SymposiumContentExecutor implements ContentExecutor {
   }
 
   private generateHTMLOutput(result: ExecutionResult): string {
-    // For unified HTML documents, use the HTML directly if it's a complete document
-    if (result.html && result.html.trim().startsWith('<!DOCTYPE html>')) {
-      // It's a complete HTML document, inject the demoAPI script
-      const htmlContent = result.html;
+    // Only support unified HTML documents - require complete HTML structure
+    if (!result.html || !result.html.trim().startsWith('<!DOCTYPE html>')) {
+      throw new Error('Content blocks must be complete HTML documents starting with <!DOCTYPE html>');
+    }
 
-      // Insert the demoAPI script before the closing </body> tag
-      const demoAPIScript = `
+    // It's a complete HTML document, inject the demoAPI script
+    const htmlContent = result.html;
+
+    // Insert the demoAPI script before the closing </body> tag
+    const demoAPIScript = `
         <script>
           // Demo API for content blocks - communicates with parent window
           window.demoAPI = {
@@ -402,40 +433,9 @@ export class SymposiumContentExecutor implements ContentExecutor {
         </script>
       `;
 
-      // Replace the placeholder and inject the demoAPI script before the closing </body> tag
-      const scriptWithBlockId = demoAPIScript.replace('BLOCK_ID_PLACEHOLDER', blockId);
-      return htmlContent.replace('</body>', scriptWithBlockId + '</body>');
-    } else {
-      // Fallback for legacy format - construct HTML from separate parts
-      const css = result.css || '';
-      const html = result.html || '<p>Content block executed successfully</p>';
-      const javascript = result.javascript || '';
-
-      return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            body {
-              font-family: system-ui, -apple-system, sans-serif;
-              margin: 0;
-              padding: 16px;
-              line-height: 1.6;
-            }
-            ${css}
-          </style>
-        </head>
-        <body>
-          ${html}
-          <script>
-            ${javascript}
-          </script>
-        </body>
-        </html>
-      `.trim();
-    }
+    // Replace the placeholder and inject the demoAPI script before the closing </body> tag
+    const scriptWithBlockId = demoAPIScript.replace('BLOCK_ID_PLACEHOLDER', 'blockId');
+    return htmlContent.replace('</body>', scriptWithBlockId + '</body>');
   }
 
   // Get execution statistics
